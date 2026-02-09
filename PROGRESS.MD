@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 2 - Pydantic Models
+**Active Phase**: Phase 3 - Task Execution
 **Last Updated**: 2026-02-09
 
 ---
@@ -15,7 +15,7 @@
 | Phase | Description | Status | Notes |
 |-------|-------------|--------|-------|
 | 1 | Project Setup and Database | COMPLETE | deps installed, database.py with all 5 tables |
-| 2 | Pydantic Models | NOT STARTED | models.py |
+| 2 | Pydantic Models | COMPLETE | models.py |
 | 3 | Task Execution | NOT STARTED | tasks.py |
 | 4 | Database Helper Functions | NOT STARTED | CRUD in executor.py |
 | 5 | Execution Loop | NOT STARTED | Step execution + run loop in executor.py |
@@ -33,7 +33,7 @@
 | pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic added |
 | main.py | FastAPI app + routes | EXISTS - placeholder only |
 | database.py | DB connection handling + schema init | DONE |
-| models.py | Pydantic request/response models | NOT CREATED |
+| models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | NOT CREATED |
 | executor.py | CRUD helpers + execution loop + recovery | NOT CREATED |
 | static/index.html | Dashboard frontend | NOT CREATED |
@@ -56,15 +56,15 @@
 - [x] Verify: all 5 tables created and queryable
 
 ### Phase 2: Pydantic Models
-- [ ] WorkflowStepConfig (action, duration_seconds, fail_probability, max_retries)
-- [ ] WorkflowStep (id, type as free-form string, config, depends_on)
-- [ ] CreateWorkflowRequest (name, steps) with validation
-- [ ] WorkflowSummaryResponse (id, name, created_at — for list endpoint)
-- [ ] WorkflowDetailResponse (id, name, definition, created_at — for detail endpoint)
-- [ ] RunSummaryResponse (id, workflow_id, workflow_name, status, started_at, completed_at — for list endpoint)
-- [ ] RunDetailResponse (id, workflow_id, workflow_name, status, started_at, completed_at, steps — for detail endpoint)
-- [ ] StepStateResponse (id, step_id, step_index, status, retry_count, max_retries, started_at, completed_at, error_message)
-- [ ] CreateOrderRequest (amount only), OrderResponse
+- [x] WorkflowStepConfig (action, duration_seconds, fail_probability, max_retries)
+- [x] WorkflowStep (id, type as free-form string, config, depends_on)
+- [x] CreateWorkflowRequest (name, steps) with validation
+- [x] WorkflowSummaryResponse (id, name, created_at — for list endpoint)
+- [x] WorkflowDetailResponse (id, name, definition, created_at — for detail endpoint)
+- [x] RunSummaryResponse (id, workflow_id, workflow_name, status, started_at, completed_at — for list endpoint)
+- [x] RunDetailResponse (id, workflow_id, workflow_name, status, started_at, completed_at, steps — for detail endpoint)
+- [x] StepStateResponse (id, step_id, step_index, status, retry_count, max_retries, started_at, completed_at, error_message)
+- [x] CreateOrderRequest (amount only), OrderResponse
 
 ### Phase 3: Task Execution
 - [ ] `execute_task(config)` - sleep for duration, random failure based on fail_probability
@@ -126,7 +126,7 @@
 | Checkpoint | Phase | Passed |
 |------------|-------|--------|
 | All 5 tables created in SQLite | 1 | YES |
-| Models validate/reject correctly | 2 | NO |
+| Models validate/reject correctly | 2 | YES |
 | Task executor sleeps, succeeds, fails as configured | 3 | NO |
 | CRUD round-trip works | 4 | NO |
 | 3-step workflow completes sequentially | 5 | NO |
