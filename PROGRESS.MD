@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 1 - Project Setup and Database
+**Active Phase**: Phase 2 - Pydantic Models
 **Last Updated**: 2026-02-09
 
 ---
@@ -14,7 +14,7 @@
 
 | Phase | Description | Status | Notes |
 |-------|-------------|--------|-------|
-| 1 | Project Setup and Database | IN PROGRESS | uv project scaffolded, need deps + database.py |
+| 1 | Project Setup and Database | COMPLETE | deps installed, database.py with all 5 tables |
 | 2 | Pydantic Models | NOT STARTED | models.py |
 | 3 | Task Execution | NOT STARTED | tasks.py |
 | 4 | Database Helper Functions | NOT STARTED | CRUD in executor.py |
@@ -30,9 +30,9 @@
 
 | File | Purpose | Status |
 |------|---------|--------|
-| pyproject.toml | Project config, dependencies | EXISTS - needs FastAPI/uvicorn/pydantic deps |
+| pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic added |
 | main.py | FastAPI app + routes | EXISTS - placeholder only |
-| database.py | DB connection handling + schema init | NOT CREATED |
+| database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | NOT CREATED |
 | tasks.py | Simulated task executor | NOT CREATED |
 | executor.py | CRUD helpers + execution loop + recovery | NOT CREATED |
@@ -48,12 +48,12 @@
 
 ### Phase 1: Project Setup and Database
 - [x] uv project initialized (pyproject.toml, .python-version, .gitignore exist)
-- [ ] `uv add fastapi uvicorn pydantic`
-- [ ] Create database.py:
-  - [ ] `get_connection()` - returns sqlite3.Connection with row_factory
-  - [ ] `init_db()` - creates all 5 tables (workflows, runs, steps, step_results, orders)
-  - [ ] DB file location (e.g., `workflow.db` in project root)
-- [ ] Verify: `uv run python -c "from database import init_db; init_db()"`, confirm 5 tables
+- [x] `uv add fastapi uvicorn pydantic`
+- [x] Create database.py:
+  - [x] `get_connection()` - returns sqlite3.Connection with row_factory
+  - [x] `init_db()` - creates all 5 tables (workflows, runs, steps, step_results, orders)
+  - [x] DB file location: `workflow.db` in project root
+- [x] Verify: all 5 tables created and queryable
 
 ### Phase 2: Pydantic Models
 - [ ] WorkflowStepConfig (action, duration_seconds, fail_probability, max_retries)
@@ -117,7 +117,7 @@
 
 | Checkpoint | Phase | Passed |
 |------------|-------|--------|
-| All 5 tables created in SQLite | 1 | NO |
+| All 5 tables created in SQLite | 1 | YES |
 | Models validate/reject correctly | 2 | NO |
 | Task executor sleeps, succeeds, fails as configured | 3 | NO |
 | CRUD round-trip works | 4 | NO |
@@ -133,4 +133,4 @@
 
 _Track any issues encountered or decisions made during implementation._
 
-(none yet)
+- **Branching strategy**: Each phase lives on its own branch (e.g., `phase-1/setup-and-database`), merged to main on completion.
