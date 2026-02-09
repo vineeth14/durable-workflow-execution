@@ -57,10 +57,14 @@
 
 ### Phase 2: Pydantic Models
 - [ ] WorkflowStepConfig (action, duration_seconds, fail_probability, max_retries)
-- [ ] WorkflowStep (id, type, config, depends_on)
+- [ ] WorkflowStep (id, type as free-form string, config, depends_on)
 - [ ] CreateWorkflowRequest (name, steps) with validation
-- [ ] WorkflowResponse, RunResponse, RunDetailResponse, StepStateResponse
-- [ ] CreateOrderRequest, OrderResponse
+- [ ] WorkflowSummaryResponse (id, name, created_at — for list endpoint)
+- [ ] WorkflowDetailResponse (id, name, definition, created_at — for detail endpoint)
+- [ ] RunSummaryResponse (id, workflow_id, workflow_name, status, started_at, completed_at — for list endpoint)
+- [ ] RunDetailResponse (id, workflow_id, workflow_name, status, started_at, completed_at, steps — for detail endpoint)
+- [ ] StepStateResponse (id, step_id, step_index, status, retry_count, max_retries, started_at, completed_at, error_message)
+- [ ] CreateOrderRequest (amount only), OrderResponse
 
 ### Phase 3: Task Execution
 - [ ] `execute_task(config)` - sleep for duration, random failure based on fail_probability
@@ -70,12 +74,16 @@
 - [ ] create_workflow(conn, name, definition_json) -> workflow_id
 - [ ] create_run(conn, workflow_id) -> run_id
 - [ ] create_steps(conn, run_id, steps_definition) -> list of step records
+- [ ] get_all_workflows(conn) -> list of workflow summary records
+- [ ] get_workflow(conn, workflow_id) -> full workflow record or None
+- [ ] get_all_runs(conn) -> list of run records with workflow_name (JOIN on workflows)
+- [ ] get_run_detail(conn, run_id) -> run record with workflow_name (JOIN) or None
 - [ ] get_steps_for_run(conn, run_id) -> ordered by step_index
 - [ ] update_step_status(conn, step_id, status, ...)
 - [ ] insert_step_result(conn, idempotency_key, step_id, result_data)
 - [ ] check_step_result(conn, idempotency_key) -> result or None
-- [ ] get_running_runs(conn) -> list of run records
-- [ ] Order CRUD helpers
+- [ ] get_running_runs(conn) -> list of run records (for crash recovery)
+- [ ] Order CRUD helpers (create_order, get_order)
 
 ### Phase 5: Execution Loop
 - [ ] `execute_run(run_id)` - main loop running in background thread
@@ -89,14 +97,14 @@
 - [ ] Same execution loop handles skipping completed steps
 
 ### Phase 7: API Routes
-- [ ] POST /workflows (201)
-- [ ] POST /workflows/{workflow_id}/runs (202)
-- [ ] GET /workflows (200)
-- [ ] GET /workflows/{workflow_id} (200)
-- [ ] GET /runs (200)
-- [ ] GET /runs/{run_id} (200)
-- [ ] POST /orders (201)
-- [ ] GET /orders/{order_id} (200)
+- [ ] POST /workflows (201) -> WorkflowDetailResponse
+- [ ] POST /workflows/{workflow_id}/runs (202) -> RunDetailResponse
+- [ ] GET /workflows (200) -> list[WorkflowSummaryResponse]
+- [ ] GET /workflows/{workflow_id} (200) -> WorkflowDetailResponse
+- [ ] GET /runs (200) -> list[RunSummaryResponse] (with workflow_name via JOIN)
+- [ ] GET /runs/{run_id} (200) -> RunDetailResponse (with steps)
+- [ ] POST /orders (201) -> OrderResponse
+- [ ] GET /orders/{order_id} (200) -> OrderResponse
 - [ ] CORS middleware for frontend
 - [ ] Startup event calls init_db() + recover_interrupted_runs()
 
@@ -134,3 +142,6 @@
 _Track any issues encountered or decisions made during implementation._
 
 - **Branching strategy**: Each phase lives on its own branch (e.g., `phase-1/setup-and-database`), merged to main on completion.
+- **`type` field**: Free-form string on WorkflowStep, not validated to "task". Extensible for future step types.
+- **List vs detail responses**: GET /workflows list excludes `definition`; GET /runs list excludes `steps` but includes `workflow_name` via JOIN. Detail endpoints return full data.
+- **CreateOrderRequest**: Only `amount` field. Status defaults to "pending", timestamps auto-generated.

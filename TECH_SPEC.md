@@ -252,8 +252,51 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 ### Validation Rules
 
 - Each step must have a unique `id`
+- `type` is a free-form string (e.g., `"task"`). Not validated against a fixed set — extensible for future step types.
 - `depends_on` may only reference step IDs that appear earlier in the array
 - `fail_probability` must be between 0.0 and 1.0
+
+### GET /workflows - Response
+
+```json
+[
+  {
+    "id": "wf-uuid",
+    "name": "order-processing",
+    "created_at": "2024-01-01T00:00:00"
+  }
+]
+```
+
+> List endpoint excludes `definition` for lighter responses. Use GET /workflows/{id} for full JSON.
+
+### GET /workflows/{workflow_id} - Response
+
+```json
+{
+  "id": "wf-uuid",
+  "name": "order-processing",
+  "definition": { "...full workflow JSON..." },
+  "created_at": "2024-01-01T00:00:00"
+}
+```
+
+### GET /runs - Response
+
+```json
+[
+  {
+    "id": "run-uuid",
+    "workflow_id": "wf-uuid",
+    "workflow_name": "order-processing",
+    "status": "running",
+    "started_at": "2024-01-01T00:00:00",
+    "completed_at": null
+  }
+]
+```
+
+> List endpoint excludes `steps`. Includes `workflow_name` (via JOIN) for frontend dashboard table.
 
 ### GET /runs/{run_id} - Response
 
@@ -278,6 +321,26 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
       "error_message": null
     }
   ]
+}
+```
+
+### POST /orders - Request
+
+```json
+{
+  "amount": 49.99
+}
+```
+
+### GET /orders/{order_id} - Response
+
+```json
+{
+  "id": "order-uuid",
+  "status": "pending",
+  "amount": 49.99,
+  "created_at": "2024-01-01T00:00:00",
+  "updated_at": "2024-01-01T00:00:00"
 }
 ```
 
