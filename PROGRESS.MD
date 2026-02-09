@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 3 - Task Execution
+**Active Phase**: Phase 4 - Database Helper Functions
 **Last Updated**: 2026-02-09
 
 ---
@@ -16,7 +16,7 @@
 |-------|-------------|--------|-------|
 | 1 | Project Setup and Database | COMPLETE | deps installed, database.py with all 5 tables |
 | 2 | Pydantic Models | COMPLETE | models.py |
-| 3 | Task Execution | NOT STARTED | tasks.py |
+| 3 | Task Execution | COMPLETE | tasks.py |
 | 4 | Database Helper Functions | NOT STARTED | CRUD in executor.py |
 | 5 | Execution Loop | NOT STARTED | Step execution + run loop in executor.py |
 | 6 | Crash Recovery | NOT STARTED | Startup recovery routine |
@@ -34,7 +34,7 @@
 | main.py | FastAPI app + routes | EXISTS - placeholder only |
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
-| tasks.py | Simulated task executor | NOT CREATED |
+| tasks.py | Simulated task executor | DONE |
 | executor.py | CRUD helpers + execution loop + recovery | NOT CREATED |
 | static/index.html | Dashboard frontend | NOT CREATED |
 | static/run.html | Run detail frontend | NOT CREATED |
@@ -67,8 +67,8 @@
 - [x] CreateOrderRequest (amount only), OrderResponse
 
 ### Phase 3: Task Execution
-- [ ] `execute_task(config)` - sleep for duration, random failure based on fail_probability
-- [ ] Returns result dict on success, raises exception on failure
+- [x] `execute_task(config)` - sleep for duration, random failure based on fail_probability
+- [x] Returns result dict on success, raises TaskExecutionError on failure
 
 ### Phase 4: Database Helper Functions
 - [ ] create_workflow(conn, name, definition_json) -> workflow_id
@@ -127,7 +127,7 @@
 |------------|-------|--------|
 | All 5 tables created in SQLite | 1 | YES |
 | Models validate/reject correctly | 2 | YES |
-| Task executor sleeps, succeeds, fails as configured | 3 | NO |
+| Task executor sleeps, succeeds, fails as configured | 3 | YES |
 | CRUD round-trip works | 4 | NO |
 | 3-step workflow completes sequentially | 5 | NO |
 | Crash recovery resumes without re-executing completed steps | 6 | NO |
