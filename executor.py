@@ -1,8 +1,12 @@
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
+
+from models import WorkflowStepConfig
+from tasks import TaskExecutionError, execute_task
 
 logger = logging.getLogger(__name__)
 
@@ -221,3 +225,154 @@ def get_order(conn: sqlite3.Connection, order_id: str) -> sqlite3.Row | None:
         "SELECT * FROM orders WHERE id = ?",
         (order_id,),
     ).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Execution Loop (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def execute_step(
+    conn: sqlite3.Connection, step_row: sqlite3.Row, step_config: WorkflowStepConfig
+) -> str:
+    """Execute a single step with idempotency and retry support.
+
+    Returns "completed", "retry", or "failed".
+    """
+    step_id = step_row["id"]
+    retry_count = step_row["retry_count"]
+    max_retries = step_row["max_retries"]
+
+    # 1. Reuse existing idempotency key (crash recovery) or generate a new one
+    idem_key = step_row["idempotency_key"] or str(uuid.uuid4())
+    update_step_status(
+        conn, step_id, "running",
+        idempotency_key=idem_key, started_at=_now(),
+    )
+    conn.commit()
+
+    # 2. Check for existing result (idempotency — crash recovery case)
+    existing = check_step_result(conn, idem_key)
+    if existing is not None:
+        logger.info("Step %s: found existing result for idem key %s, skipping", step_id, idem_key)
+        update_step_status(conn, step_id, "completed", completed_at=_now())
+        conn.commit()
+        return "completed"
+
+    # 3. Execute the task
+    try:
+        result = execute_task(step_config)
+    except TaskExecutionError as e:
+        if retry_count < max_retries:
+            # Retry: increment count, new idem key, back to pending
+            new_idem_key = str(uuid.uuid4())
+            update_step_status(
+                conn, step_id, "pending",
+                retry_count=retry_count + 1, idempotency_key=new_idem_key,
+            )
+            conn.commit()
+            logger.info(
+                "Step %s: attempt %d/%d failed, will retry",
+                step_id, retry_count + 1, max_retries + 1,
+            )
+            return "retry"
+        else:
+            # Exhausted: mark failed
+            update_step_status(
+                conn, step_id, "failed",
+                completed_at=_now(), error_message=str(e),
+            )
+            conn.commit()
+            logger.warning("Step %s: permanently failed after %d attempts", step_id, retry_count + 1)
+            return "failed"
+
+    # 4. Success: atomic commit — insert result + mark completed
+    insert_step_result(conn, idem_key, step_id, result)
+    update_step_status(conn, step_id, "completed", completed_at=_now())
+    conn.commit()
+    logger.info("Step %s: completed successfully", step_id)
+    return "completed"
+
+
+def execute_run(run_id: str) -> None:
+    """Execute all steps in a run sequentially. Designed for background threads.
+
+    Opens its own DB connection for thread safety.
+    """
+    from database import get_connection
+
+    conn = get_connection()
+    try:
+        # Load run and workflow definition
+        run = get_run_detail(conn, run_id)
+        if run is None:
+            logger.error("Run %s not found", run_id)
+            return
+
+        workflow = get_workflow(conn, run["workflow_id"])
+        if workflow is None:
+            logger.error("Workflow %s not found for run %s", run["workflow_id"], run_id)
+            return
+
+        definition = json.loads(workflow["definition"])
+        step_configs = definition["steps"]
+
+        # Mark run as running
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        # Process steps sequentially
+        steps = get_steps_for_run(conn, run_id)
+        run_failed = False
+
+        for step_row in steps:
+            # Skip completed steps (crash recovery)
+            if step_row["status"] == "completed":
+                logger.info("Step %s (%s): already completed, skipping", step_row["id"], step_row["step_id"])
+                continue
+
+            # Build config from workflow definition
+            config_dict = step_configs[step_row["step_index"]]["config"]
+            step_config = WorkflowStepConfig(**config_dict)
+
+            # Retry loop for this step
+            while True:
+                # Re-fetch step to get current retry_count (may have been incremented)
+                current_step = get_steps_for_run(conn, run_id)
+                current = next(s for s in current_step if s["id"] == step_row["id"])
+
+                outcome = execute_step(conn, current, step_config)
+
+                if outcome == "completed":
+                    break
+                elif outcome == "retry":
+                    continue
+                else:  # "failed"
+                    run_failed = True
+                    break
+
+            if run_failed:
+                break
+
+        # Set final run status
+        final_status = "failed" if run_failed else "completed"
+        update_run_status(conn, run_id, final_status, completed_at=_now())
+        conn.commit()
+        logger.info("Run %s: finished with status '%s'", run_id, final_status)
+
+    except Exception:
+        logger.exception("Run %s: unexpected error during execution", run_id)
+        try:
+            update_run_status(conn, run_id, "failed", completed_at=_now())
+            conn.commit()
+        except Exception:
+            logger.exception("Run %s: failed to update run status after error", run_id)
+    finally:
+        conn.close()
+
+
+def start_run_thread(run_id: str) -> threading.Thread:
+    """Spawn a daemon thread to execute a run in the background."""
+    thread = threading.Thread(target=execute_run, args=(run_id,), daemon=True)
+    thread.start()
+    return thread

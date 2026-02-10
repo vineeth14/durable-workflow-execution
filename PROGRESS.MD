@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 5 - Execution Loop
+**Active Phase**: Phase 6 - Crash Recovery
 **Last Updated**: 2026-02-09
 
 ---
@@ -18,7 +18,7 @@
 | 2 | Pydantic Models | COMPLETE | models.py |
 | 3 | Task Execution | COMPLETE | tasks.py |
 | 4 | Database Helper Functions | COMPLETE | executor.py — 15 CRUD functions |
-| 5 | Execution Loop | NOT STARTED | Step execution + run loop in executor.py |
+| 5 | Execution Loop | COMPLETE | execute_step, execute_run, start_run_thread in executor.py |
 | 6 | Crash Recovery | NOT STARTED | Startup recovery routine |
 | 7 | API Routes | NOT STARTED | FastAPI routes in main.py |
 | 8 | Frontend | NOT STARTED | index.html, run.html, style.css |
@@ -30,16 +30,17 @@
 
 | File | Purpose | Status |
 |------|---------|--------|
-| pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic added |
+| pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic + pytest (dev) |
 | main.py | FastAPI app + routes | EXISTS - placeholder only |
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
-| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD helpers (Phase 4) |
+| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD (Phase 4) + execution loop (Phase 5) |
 | static/index.html | Dashboard frontend | NOT CREATED |
 | static/run.html | Run detail frontend | NOT CREATED |
 | static/style.css | Frontend styling | NOT CREATED |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
+| test_executor.py | Pytest tests for executor.py CRUD + execution loop | DONE - 33 tests |
 | README.md | Setup instructions | EXISTS - empty |
 
 ---
@@ -87,10 +88,12 @@
 - [x] update_run_status(conn, run_id, status, **kwargs) — bonus, needed by Phase 5
 
 ### Phase 5: Execution Loop
-- [ ] `execute_run(run_id)` - main loop running in background thread
-- [ ] `execute_step(conn, step)` - single step with idempotency
-- [ ] Correct commit ordering: idem key -> status "running" -> check result -> work -> atomic commit
-- [ ] Retry logic: increment count, fresh idem key, status back to "pending"
+- [x] `execute_step(conn, step_row, step_config)` - single step with idempotency
+- [x] `execute_run(run_id)` - main loop running in background thread (own DB connection)
+- [x] `start_run_thread(run_id)` - daemon thread wrapper
+- [x] Correct commit ordering: idem key + status "running" -> check result -> work -> atomic commit
+- [x] Retry logic: increment count, fresh idem key, status back to "pending"
+- [x] Crash recovery: skips completed steps, re-executes pending/running steps
 
 ### Phase 6: Crash Recovery
 - [ ] `recover_interrupted_runs()` - called at startup before accepting requests
@@ -130,7 +133,7 @@
 | Models validate/reject correctly | 2 | YES |
 | Task executor sleeps, succeeds, fails as configured | 3 | YES |
 | CRUD round-trip works | 4 | YES |
-| 3-step workflow completes sequentially | 5 | NO |
+| 3-step workflow completes sequentially | 5 | YES |
 | Crash recovery resumes without re-executing completed steps | 6 | NO |
 | All API endpoints respond correctly via curl | 7 | NO |
 | Frontend shows real-time step updates in browser | 8 | NO |
@@ -149,3 +152,4 @@ _Track any issues encountered or decisions made during implementation._
 - **CRUD return types**: executor.py returns sqlite3.Row objects (no Pydantic imports). SQL aliases match Pydantic field names for easy `Model(**dict(row))` in API layer.
 - **Commit policy**: Standalone creates (create_workflow, create_run, create_steps, create_order) commit. Updates used by execution loop (update_step_status, insert_step_result, update_run_status) do NOT commit — caller controls transactions for atomicity.
 - **update_step_status / update_run_status**: Use **kwargs with allowlist for flexible field updates.
+- **Idempotency key reuse**: `execute_step` reuses existing idempotency key on crash recovery instead of always generating a new one. Without this, the idempotency check was dead code.

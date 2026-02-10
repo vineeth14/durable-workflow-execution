@@ -9,6 +9,7 @@ Usage: uv run pytest test_executor.py -v
 import json
 import os
 import uuid
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +22,8 @@ from executor import (
     create_run,
     create_steps,
     create_workflow,
+    execute_run,
+    execute_step,
     get_all_runs,
     get_all_workflows,
     get_order,
@@ -29,6 +32,7 @@ from executor import (
     get_steps_for_run,
     get_workflow,
     insert_step_result,
+    start_run_thread,
     update_run_status,
     update_step_status,
 )
@@ -502,3 +506,347 @@ class TestEdgeCases:
 
     def test_check_nonexistent_idempotency_key(self, conn):
         assert check_step_result(conn, "nonexistent-key") is None
+
+
+# ==================================================================
+# Test 9: execute_step — direct unit tests
+# ==================================================================
+class TestExecuteStep:
+    def test_happy_path_completion(self, conn, sample_workflow):
+        _, run_id, step_rows = _create_full_run(conn, sample_workflow)
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        config = sample_workflow.steps[0].config
+        outcome = execute_step(conn, step_rows[0], config)
+
+        assert outcome == "completed"
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "completed"
+        assert step["started_at"] is not None
+        assert step["completed_at"] is not None
+        assert step["idempotency_key"] is not None
+        # Result was inserted
+        assert check_step_result(conn, step["idempotency_key"]) is not None
+
+    def test_idempotency_skip_on_crash_recovery(self, conn):
+        """Crash recovery: step is 'running' with idem key and result already exists.
+        execute_step should reuse the idem key, find the result, and skip execution."""
+        wf = CreateWorkflowRequest(
+            name="idem-test",
+            steps=[
+                WorkflowStep(
+                    id="s1",
+                    type="task",
+                    config=WorkflowStepConfig(
+                        action="x", duration_seconds=5.0, fail_probability=1.0,
+                    ),
+                )
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        # Simulate crash: step has idem key + result committed, but status still "running"
+        idem_key = str(uuid.uuid4())
+        update_step_status(conn, step_rows[0]["id"], "running", idempotency_key=idem_key)
+        insert_step_result(conn, idem_key, step_rows[0]["id"], {"status": "success"})
+        conn.commit()
+
+        # Re-fetch the step (now has idem_key set)
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["idempotency_key"] == idem_key
+
+        # execute_step should reuse the existing idem key, find the result, and skip.
+        # If it re-executed, it would take 5s and always fail — so this proves it skipped.
+        outcome = execute_step(conn, step, wf.steps[0].config)
+        assert outcome == "completed"
+
+        final = get_steps_for_run(conn, run_id)[0]
+        assert final["status"] == "completed"
+        assert final["idempotency_key"] == idem_key  # key was reused, not replaced
+
+    def test_running_step_no_result_reexecutes(self, conn):
+        """Crash recovery: step is 'running' with idem key but NO result (crash before commit).
+        Should re-execute the step."""
+        wf = CreateWorkflowRequest(
+            name="reexec-test",
+            steps=[
+                WorkflowStep(
+                    id="s1",
+                    type="task",
+                    config=WorkflowStepConfig(action="x", duration_seconds=0.01),
+                )
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        # Simulate crash: step has idem key but no result (work was rolled back)
+        idem_key = str(uuid.uuid4())
+        update_step_status(
+            conn, step_rows[0]["id"], "running",
+            idempotency_key=idem_key, started_at=_now(),
+        )
+        conn.commit()
+        assert check_step_result(conn, idem_key) is None
+
+        step = get_steps_for_run(conn, run_id)[0]
+        outcome = execute_step(conn, step, wf.steps[0].config)
+
+        assert outcome == "completed"
+        final = get_steps_for_run(conn, run_id)[0]
+        assert final["status"] == "completed"
+        # Result now exists for the reused idem key
+        assert check_step_result(conn, idem_key) is not None
+
+    def test_retry_on_failure(self, conn):
+        wf = CreateWorkflowRequest(
+            name="retry-step-test",
+            steps=[
+                WorkflowStep(
+                    id="flaky",
+                    type="task",
+                    config=WorkflowStepConfig(
+                        action="flaky", duration_seconds=0.01,
+                        fail_probability=1.0, max_retries=2,
+                    ),
+                )
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        outcome = execute_step(conn, step_rows[0], wf.steps[0].config)
+        assert outcome == "retry"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "pending"
+        assert step["retry_count"] == 1
+        # New idem key was generated for next attempt
+        assert step["idempotency_key"] is not None
+
+    def test_exhausted_retries(self, conn):
+        wf = CreateWorkflowRequest(
+            name="exhaust-test",
+            steps=[
+                WorkflowStep(
+                    id="doomed",
+                    type="task",
+                    config=WorkflowStepConfig(
+                        action="doomed", duration_seconds=0.01,
+                        fail_probability=1.0, max_retries=0,
+                    ),
+                )
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        outcome = execute_step(conn, step_rows[0], wf.steps[0].config)
+        assert outcome == "failed"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "failed"
+        assert step["error_message"] is not None
+
+
+# ==================================================================
+# Test 10: execute_run — end-to-end execution loop
+# ==================================================================
+class TestExecuteRun:
+    def test_three_step_happy_path(self, conn, sample_workflow):
+        """3-step workflow completes in order — Phase 5 verification checkpoint."""
+        wf_id, run_id, _ = _create_full_run(conn, sample_workflow)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+        assert run["started_at"] is not None
+        assert run["completed_at"] is not None
+
+        steps = get_steps_for_run(conn, run_id)
+        assert len(steps) == 3
+        assert all(s["status"] == "completed" for s in steps)
+        assert [s["step_id"] for s in steps] == ["validate", "charge", "ship"]
+        # Steps completed in order (each started_at >= previous completed_at)
+        for i in range(1, len(steps)):
+            assert steps[i]["started_at"] >= steps[i - 1]["completed_at"]
+
+    def test_middle_step_permanent_failure(self, conn):
+        """Middle step fails permanently → run "failed", later steps still "pending"."""
+        wf = CreateWorkflowRequest(
+            name="fail-middle",
+            steps=[
+                WorkflowStep(
+                    id="s1", type="task",
+                    config=WorkflowStepConfig(action="pass", duration_seconds=0.01),
+                ),
+                WorkflowStep(
+                    id="s2", type="task",
+                    config=WorkflowStepConfig(
+                        action="fail", duration_seconds=0.01,
+                        fail_probability=1.0, max_retries=0,
+                    ),
+                    depends_on=["s1"],
+                ),
+                WorkflowStep(
+                    id="s3", type="task",
+                    config=WorkflowStepConfig(action="never", duration_seconds=0.01),
+                    depends_on=["s2"],
+                ),
+            ],
+        )
+        _, run_id, _ = _create_full_run(conn, wf)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "failed"
+
+        steps = get_steps_for_run(conn, run_id)
+        assert steps[0]["status"] == "completed"
+        assert steps[1]["status"] == "failed"
+        assert steps[2]["status"] == "pending"
+
+    def test_retry_then_succeed_via_mock(self, conn):
+        """Step fails twice then succeeds on third attempt. Verifies retry loop."""
+        wf = CreateWorkflowRequest(
+            name="retry-succeed",
+            steps=[
+                WorkflowStep(
+                    id="flaky", type="task",
+                    config=WorkflowStepConfig(
+                        action="flaky", duration_seconds=0.01,
+                        fail_probability=0.0, max_retries=3,
+                    ),
+                ),
+            ],
+        )
+        _, run_id, _ = _create_full_run(conn, wf)
+
+        call_count = 0
+
+        def mock_execute_task(config):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise TaskExecutionError("simulated failure")
+            return {"status": "success", "action": config.action}
+
+        with patch("executor.execute_task", side_effect=mock_execute_task):
+            execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "completed"
+        assert step["retry_count"] == 2  # failed twice before succeeding
+        assert call_count == 3
+
+    def test_retry_exhaustion_via_execute_run(self, conn):
+        """Step with max_retries=2 and fail_probability=1.0: 3 total attempts, then run fails."""
+        wf = CreateWorkflowRequest(
+            name="exhaust-run",
+            steps=[
+                WorkflowStep(
+                    id="doomed", type="task",
+                    config=WorkflowStepConfig(
+                        action="doomed", duration_seconds=0.01,
+                        fail_probability=1.0, max_retries=2,
+                    ),
+                ),
+            ],
+        )
+        _, run_id, _ = _create_full_run(conn, wf)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "failed"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "failed"
+        assert step["retry_count"] == 2
+        assert step["error_message"] is not None
+
+    def test_crash_recovery_skips_completed_steps(self, conn, sample_workflow):
+        """Pre-complete first step, then run. First step should be skipped."""
+        _, run_id, step_rows = _create_full_run(conn, sample_workflow)
+
+        # Manually complete the first step (simulating partial execution before crash)
+        idem_key = str(uuid.uuid4())
+        update_step_status(
+            conn, step_rows[0]["id"], "completed",
+            idempotency_key=idem_key, started_at=_now(), completed_at=_now(),
+        )
+        insert_step_result(conn, idem_key, step_rows[0]["id"], {"status": "success"})
+        conn.commit()
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        steps = get_steps_for_run(conn, run_id)
+        assert all(s["status"] == "completed" for s in steps)
+        # First step retry_count should still be 0 (wasn't re-executed)
+        assert steps[0]["retry_count"] == 0
+
+    def test_crash_recovery_idempotency_running_step_with_result(self, conn):
+        """Crash scenario: step is 'running', has idem key, result exists.
+        execute_run should detect result via idempotency and skip re-execution."""
+        wf = CreateWorkflowRequest(
+            name="idem-run-test",
+            steps=[
+                WorkflowStep(
+                    id="s1", type="task",
+                    config=WorkflowStepConfig(
+                        action="x", duration_seconds=5.0, fail_probability=1.0,
+                    ),
+                ),
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+
+        # Simulate crash: step "running" with idem key + result committed
+        idem_key = str(uuid.uuid4())
+        update_step_status(
+            conn, step_rows[0]["id"], "running",
+            idempotency_key=idem_key, started_at=_now(),
+        )
+        insert_step_result(conn, idem_key, step_rows[0]["id"], {"status": "success"})
+        conn.commit()
+
+        # If idempotency fails, this would take 5s and always fail.
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "completed"
+        assert step["idempotency_key"] == idem_key  # key reused
+
+    def test_execute_run_nonexistent_run(self, conn):
+        """execute_run with bad run_id should return gracefully (no crash)."""
+        execute_run("nonexistent-id")
+        # No exception raised — just logged and returned
+
+    def test_start_run_thread(self, conn, sample_workflow):
+        """start_run_thread spawns a daemon thread that completes the run."""
+        _, run_id, _ = _create_full_run(conn, sample_workflow)
+
+        thread = start_run_thread(run_id)
+        thread.join(timeout=10)
+
+        assert not thread.is_alive()
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
