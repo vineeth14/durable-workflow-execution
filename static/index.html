@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workflow Engine</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Workflow Engine</h1>
+
+    <!-- Submit Workflow -->
+    <section>
+      <h2>Submit Workflow</h2>
+      <textarea id="workflow-json" placeholder='{
+  "name": "order-processing",
+  "steps": [
+    {
+      "id": "validate",
+      "type": "task",
+      "config": {
+        "action": "validate_order",
+        "duration_seconds": 2,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": []
+    },
+    {
+      "id": "charge",
+      "type": "task",
+      "config": {
+        "action": "charge_payment",
+        "duration_seconds": 3,
+        "fail_probability": 0.3,
+        "max_retries": 2
+      },
+      "depends_on": ["validate"]
+    },
+    {
+      "id": "fulfill",
+      "type": "task",
+      "config": {
+        "action": "fulfill_order",
+        "duration_seconds": 2,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["charge"]
+    },
+    {
+      "id": "notify",
+      "type": "task",
+      "config": {
+        "action": "send_notification",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["fulfill"]
+    }
+  ]
+}'></textarea>
+      <div style="display:flex; gap:8px;">
+        <button id="submit-btn" onclick="submitWorkflow()">Start Workflow</button>
+        <button id="format-btn" onclick="formatJSON()" style="background:#555;">Format JSON</button>
+      </div>
+      <div id="submit-error" class="error"></div>
+    </section>
+
+    <!-- Runs List -->
+    <section>
+      <h2>Runs</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Workflow</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody id="runs-tbody"></tbody>
+      </table>
+      <p id="runs-empty" style="color:#888; font-size:0.85rem; display:none;">No runs yet.</p>
+    </section>
+
+    <!-- Orders Demo -->
+    <section>
+      <h2>Orders (Demo)</h2>
+      <div class="form-row">
+        <label>Amount $</label>
+        <input type="number" id="order-amount" step="0.01" min="0.01" value="49.99">
+        <button onclick="createOrder()">Create Order</button>
+      </div>
+      <div class="form-row">
+        <label>Order ID</label>
+        <input type="text" id="order-id" placeholder="paste order UUID">
+        <button onclick="lookupOrder()">Lookup</button>
+      </div>
+      <div id="order-result" class="order-result" style="display:none;"></div>
+    </section>
+  </div>
+
+<script>
+const API = '';
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(API + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+  return data;
+}
+
+// --- JSON auto-fix ---
+
+function tryFixJSON(raw) {
+  let s = raw.trim();
+  // Replace single quotes with double quotes (but not inside double-quoted strings)
+  s = s.replace(/'/g, '"');
+  // Remove trailing commas before } or ]
+  s = s.replace(/,\s*([}\]])/g, '$1');
+  // Quote unquoted keys: word before colon that isn't already quoted
+  s = s.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
+  return s;
+}
+
+function formatJSON() {
+  const ta = document.getElementById('workflow-json');
+  const errEl = document.getElementById('submit-error');
+  errEl.textContent = '';
+  let parsed;
+  try {
+    parsed = JSON.parse(ta.value);
+  } catch (_) {
+    try {
+      parsed = JSON.parse(tryFixJSON(ta.value));
+    } catch (e) {
+      errEl.textContent = 'Cannot fix JSON: ' + e.message;
+      return;
+    }
+  }
+  ta.value = JSON.stringify(parsed, null, 2);
+  errEl.textContent = '';
+}
+
+// --- Workflow submission ---
+
+async function submitWorkflow() {
+  const errEl = document.getElementById('submit-error');
+  const btn = document.getElementById('submit-btn');
+  const ta = document.getElementById('workflow-json');
+  errEl.textContent = '';
+
+  let json;
+  try {
+    json = JSON.parse(ta.value);
+  } catch (_) {
+    // Attempt auto-fix
+    try {
+      json = JSON.parse(tryFixJSON(ta.value));
+      ta.value = JSON.stringify(json, null, 2);
+    } catch (e) {
+      errEl.textContent = 'Invalid JSON (auto-fix failed): ' + e.message;
+      return;
+    }
+  }
+
+  btn.disabled = true;
+  try {
+    const wf = await api('POST', '/workflows', json);
+    const run = await api('POST', '/workflows/' + wf.id + '/runs');
+    window.location.href = '/run.html?id=' + run.id;
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+// --- Runs list ---
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return d.toLocaleTimeString();
+}
+
+function duration(startIso, endIso) {
+  if (!startIso) return '-';
+  const start = new Date(startIso);
+  const end = endIso ? new Date(endIso) : new Date();
+  const secs = Math.round((end - start) / 1000);
+  if (secs < 60) return secs + 's';
+  return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+}
+
+async function refreshRuns() {
+  try {
+    const runs = await api('GET', '/runs');
+    const tbody = document.getElementById('runs-tbody');
+    const empty = document.getElementById('runs-empty');
+
+    if (runs.length === 0) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    tbody.innerHTML = runs.map(r => `
+      <tr class="clickable" onclick="window.location.href='/run.html?id=${r.id}'">
+        <td>${esc(r.workflow_name)}</td>
+        <td><span class="status status-${r.status}">${r.status}</span></td>
+        <td>${formatTime(r.started_at)}</td>
+        <td>${duration(r.started_at, r.completed_at)}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error('Failed to refresh runs:', e);
+  }
+}
+
+// --- Orders ---
+
+async function createOrder() {
+  const resEl = document.getElementById('order-result');
+  const amount = parseFloat(document.getElementById('order-amount').value);
+  if (!amount || amount <= 0) { resEl.textContent = 'Enter a valid amount'; resEl.style.display = 'block'; return; }
+  try {
+    const order = await api('POST', '/orders', { amount });
+    resEl.textContent = JSON.stringify(order, null, 2);
+    resEl.style.display = 'block';
+  } catch (e) {
+    resEl.textContent = 'Error: ' + e.message;
+    resEl.style.display = 'block';
+  }
+}
+
+async function lookupOrder() {
+  const resEl = document.getElementById('order-result');
+  const id = document.getElementById('order-id').value.trim();
+  if (!id) { resEl.textContent = 'Enter an order ID'; resEl.style.display = 'block'; return; }
+  try {
+    const order = await api('GET', '/orders/' + id);
+    resEl.textContent = JSON.stringify(order, null, 2);
+    resEl.style.display = 'block';
+  } catch (e) {
+    resEl.textContent = 'Error: ' + e.message;
+    resEl.style.display = 'block';
+  }
+}
+
+// --- Helpers ---
+
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s;
+  return el.innerHTML;
+}
+
+// --- Init ---
+refreshRuns();
+setInterval(refreshRuns, 2000);
+</script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Run Detail</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <a href="/">&larr; Back to Dashboard</a>
+
+    <section id="run-header" style="margin-top: 12px;">
+      <p style="color:#888;">Loading...</p>
+    </section>
+
+    <section>
+      <h2>Steps</h2>
+      <ul id="step-list" class="step-list"></ul>
+    </section>
+  </div>
+
+<script>
+const API = '';
+const runId = new URLSearchParams(window.location.search).get('id');
+let pollTimer = null;
+
+async function api(method, path) {
+  const res = await fetch(API + path, { method });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+  return data;
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  return new Date(iso).toLocaleTimeString();
+}
+
+function duration(startIso, endIso) {
+  if (!startIso) return '-';
+  const start = new Date(startIso);
+  const end = endIso ? new Date(endIso) : new Date();
+  const secs = Math.round((end - start) / 1000);
+  if (secs < 60) return secs + 's';
+  return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+}
+
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s;
+  return el.innerHTML;
+}
+
+const ICONS = {
+  pending: '\u25EF',
+  running: '\u27F3',
+  completed: '\u2713',
+  failed: '\u2717',
+};
+
+function renderRun(run) {
+  document.title = run.workflow_name + ' - Run';
+
+  document.getElementById('run-header').innerHTML = `
+    <h1>${esc(run.workflow_name)}</h1>
+    <p>
+      <span class="status status-${run.status}">${run.status}</span>
+      &nbsp; Started: ${formatTime(run.started_at)}
+      &nbsp; Ended: ${formatTime(run.completed_at)}
+      &nbsp; Duration: ${duration(run.started_at, run.completed_at)}
+    </p>
+  `;
+
+  document.getElementById('step-list').innerHTML = run.steps.map(s => {
+    const icon = ICONS[s.status] || '?';
+    let meta = formatTime(s.started_at);
+    if (s.completed_at) meta += ' - ' + formatTime(s.completed_at);
+    if (s.max_retries > 0) {
+      meta += ' | Attempt ' + (s.retry_count + 1) + ' of ' + (s.max_retries + 1);
+    }
+    const errorHtml = s.error_message
+      ? '<div class="step-error">' + esc(s.error_message) + '</div>'
+      : '';
+    return `
+      <li class="step-item">
+        <span class="step-icon status-${s.status}" style="color: ${statusColor(s.status)}">${icon}</span>
+        <div class="step-body">
+          <div class="step-name">${esc(s.step_id)}</div>
+          <div class="step-meta">${meta}</div>
+          ${errorHtml}
+        </div>
+      </li>
+    `;
+  }).join('');
+}
+
+function statusColor(status) {
+  switch (status) {
+    case 'pending': return '#888';
+    case 'running': return '#2196F3';
+    case 'completed': return '#4CAF50';
+    case 'failed': return '#f44336';
+    default: return '#333';
+  }
+}
+
+async function loadRun() {
+  try {
+    const run = await api('GET', '/runs/' + runId);
+    renderRun(run);
+    if (run.status !== 'running' && run.status !== 'pending') {
+      clearInterval(pollTimer);
+    }
+  } catch (e) {
+    document.getElementById('run-header').innerHTML =
+      '<p class="error">Failed to load run: ' + esc(e.message) + '</p>';
+    clearInterval(pollTimer);
+  }
+}
+
+if (!runId) {
+  document.getElementById('run-header').innerHTML = '<p class="error">No run ID provided.</p>';
+} else {
+  loadRun();
+  pollTimer = setInterval(loadRun, 1500);
+}
+</script>
+</body>
+</html>

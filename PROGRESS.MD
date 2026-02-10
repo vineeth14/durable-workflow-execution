@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 8 - Frontend
+**Active Phase**: Phase 9 - Documentation
 **Last Updated**: 2026-02-10
 
 ---
@@ -21,7 +21,7 @@
 | 5 | Execution Loop | COMPLETE | execute_step, execute_run, start_run_thread in executor.py |
 | 6 | Crash Recovery | COMPLETE | recover_interrupted_runs() + started_at preservation |
 | 7 | API Routes | COMPLETE | 8 endpoints in main.py, CORS, startup event, 29 API tests |
-| 8 | Frontend | NOT STARTED | index.html, run.html, style.css |
+| 8 | Frontend | COMPLETE | index.html, run.html, style.css — vanilla JS, polling, order demo |
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
 
 ---
@@ -36,9 +36,9 @@
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
 | executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD (Phase 4) + execution loop (Phase 5) + crash recovery (Phase 6) |
-| static/index.html | Dashboard frontend | NOT CREATED |
-| static/run.html | Run detail frontend | NOT CREATED |
-| static/style.css | Frontend styling | NOT CREATED |
+| static/index.html | Dashboard frontend | DONE - workflow submit, auto-refreshing runs table, order demo |
+| static/run.html | Run detail frontend | DONE - real-time step visualization with polling |
+| static/style.css | Frontend styling | DONE - status colors, clean minimal layout |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
 | test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery | DONE - 38 tests |
 | test_api.py | API route tests — lifecycle, validation, failures, durability | DONE - 29 tests |
@@ -119,11 +119,11 @@
 - [x] API tests: 29 tests (lifecycle, validation, failures, durability)
 
 ### Phase 8: Frontend
-- [ ] index.html - workflow submission form + runs list table
-- [ ] run.html - real-time run detail with step visualization
-- [ ] style.css - status colors, clean layout
-- [ ] Polling logic (1-2s interval, stops when run completes/fails)
-- [ ] Static file serving from FastAPI
+- [x] index.html - workflow submission form + runs list table + order demo section
+- [x] run.html - real-time run detail with step visualization (icons, retry info, errors)
+- [x] style.css - status colors, clean minimal layout
+- [x] Polling logic (2s on dashboard, 1.5s on run detail, stops when run completes/fails)
+- [x] Static file serving from FastAPI (conditional mount already in main.py)
 
 ### Phase 9: Documentation
 - [ ] README.md - setup, run, test instructions
@@ -142,7 +142,7 @@
 | 3-step workflow completes sequentially | 5 | YES |
 | Crash recovery resumes without re-executing completed steps | 6 | YES |
 | All API endpoints respond correctly via curl | 7 | YES |
-| Frontend shows real-time step updates in browser | 8 | NO |
+| Frontend shows real-time step updates in browser | 8 | PENDING USER VERIFICATION |
 | README instructions work from scratch | 9 | NO |
 
 ---
