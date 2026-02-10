@@ -34,6 +34,7 @@ from executor import (
     insert_step_result,
     recover_interrupted_runs,
     start_run_thread,
+    topological_sort,
     update_run_status,
     update_step_status,
 )
@@ -940,3 +941,223 @@ class TestCrashRecovery:
         run = get_run_detail(conn, run_id)
         assert run["status"] == "completed"
         assert run["started_at"] == original_started_at
+
+
+# ==================================================================
+# Test 12: Topological sort — dependency-ordered execution (Phase 10)
+# ==================================================================
+class TestTopologicalSort:
+    def test_diamond_dependencies(self, conn):
+        """Diamond: A -> B, A -> C, B -> D, C -> D.
+        Stable sort: B before C (original array order)."""
+        wf = CreateWorkflowRequest(
+            name="diamond",
+            steps=[
+                WorkflowStep(id="A", type="task",
+                    config=WorkflowStepConfig(action="a", duration_seconds=0.01),
+                    depends_on=[]),
+                WorkflowStep(id="B", type="task",
+                    config=WorkflowStepConfig(action="b", duration_seconds=0.01),
+                    depends_on=["A"]),
+                WorkflowStep(id="C", type="task",
+                    config=WorkflowStepConfig(action="c", duration_seconds=0.01),
+                    depends_on=["A"]),
+                WorkflowStep(id="D", type="task",
+                    config=WorkflowStepConfig(action="d", duration_seconds=0.01),
+                    depends_on=["B", "C"]),
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        step_ids = [s["step_id"] for s in step_rows]
+        assert step_ids == ["A", "B", "C", "D"]
+        assert [s["step_index"] for s in step_rows] == [0, 1, 2, 3]
+
+    def test_out_of_order_input(self, conn):
+        """Steps listed in reverse: [C, B, A] with chain C->B->A.
+        Topo sort should produce [A, B, C]."""
+        wf = CreateWorkflowRequest(
+            name="reverse-order",
+            steps=[
+                WorkflowStep(id="C", type="task",
+                    config=WorkflowStepConfig(action="c", duration_seconds=0.01),
+                    depends_on=["B"]),
+                WorkflowStep(id="B", type="task",
+                    config=WorkflowStepConfig(action="b", duration_seconds=0.01),
+                    depends_on=["A"]),
+                WorkflowStep(id="A", type="task",
+                    config=WorkflowStepConfig(action="a", duration_seconds=0.01),
+                    depends_on=[]),
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        step_ids = [s["step_id"] for s in step_rows]
+        assert step_ids == ["A", "B", "C"]
+
+    def test_out_of_order_execution(self, conn):
+        """Out-of-order steps execute correctly end-to-end via execute_run."""
+        wf = CreateWorkflowRequest(
+            name="out-of-order-exec",
+            steps=[
+                WorkflowStep(id="C", type="task",
+                    config=WorkflowStepConfig(action="c", duration_seconds=0.01),
+                    depends_on=["B"]),
+                WorkflowStep(id="A", type="task",
+                    config=WorkflowStepConfig(action="a", duration_seconds=0.01),
+                    depends_on=[]),
+                WorkflowStep(id="B", type="task",
+                    config=WorkflowStepConfig(action="b", duration_seconds=0.01),
+                    depends_on=["A"]),
+            ],
+        )
+        _, run_id, _ = _create_full_run(conn, wf)
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        steps = get_steps_for_run(conn, run_id)
+        assert [s["step_id"] for s in steps] == ["A", "B", "C"]
+        assert all(s["status"] == "completed" for s in steps)
+
+    def test_no_dependencies_preserves_order(self, conn):
+        """Steps with no depends_on keep their original array order."""
+        wf = CreateWorkflowRequest(
+            name="no-deps",
+            steps=[
+                WorkflowStep(id="X", type="task",
+                    config=WorkflowStepConfig(action="x", duration_seconds=0.01)),
+                WorkflowStep(id="Y", type="task",
+                    config=WorkflowStepConfig(action="y", duration_seconds=0.01)),
+                WorkflowStep(id="Z", type="task",
+                    config=WorkflowStepConfig(action="z", duration_seconds=0.01)),
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+        assert [s["step_id"] for s in step_rows] == ["X", "Y", "Z"]
+
+    def test_cycle_detection(self):
+        """Circular dependencies A <-> B are rejected at validation time."""
+        with pytest.raises(ValueError, match="Circular dependency"):
+            CreateWorkflowRequest(
+                name="cycle",
+                steps=[
+                    WorkflowStep(id="A", type="task",
+                        config=WorkflowStepConfig(action="a"),
+                        depends_on=["B"]),
+                    WorkflowStep(id="B", type="task",
+                        config=WorkflowStepConfig(action="b"),
+                        depends_on=["A"]),
+                ],
+            )
+
+    def test_self_cycle_detection(self):
+        """A step depending on itself is a cycle."""
+        with pytest.raises(ValueError, match="Circular dependency"):
+            CreateWorkflowRequest(
+                name="self-cycle",
+                steps=[
+                    WorkflowStep(id="A", type="task",
+                        config=WorkflowStepConfig(action="a"),
+                        depends_on=["A"]),
+                ],
+            )
+
+    def test_three_node_cycle(self):
+        """A -> B -> C -> A is a cycle."""
+        with pytest.raises(ValueError, match="Circular dependency"):
+            CreateWorkflowRequest(
+                name="three-cycle",
+                steps=[
+                    WorkflowStep(id="A", type="task",
+                        config=WorkflowStepConfig(action="a"),
+                        depends_on=["C"]),
+                    WorkflowStep(id="B", type="task",
+                        config=WorkflowStepConfig(action="b"),
+                        depends_on=["A"]),
+                    WorkflowStep(id="C", type="task",
+                        config=WorkflowStepConfig(action="c"),
+                        depends_on=["B"]),
+                ],
+            )
+
+    def test_nonexistent_dependency_rejected(self):
+        """depends_on referencing a nonexistent step is rejected."""
+        with pytest.raises(ValueError, match="not defined"):
+            CreateWorkflowRequest(
+                name="bad-ref",
+                steps=[
+                    WorkflowStep(id="A", type="task",
+                        config=WorkflowStepConfig(action="a"),
+                        depends_on=["ghost"]),
+                ],
+            )
+
+    def test_crash_recovery_with_out_of_order_workflow(self, conn):
+        """Crash recovery works correctly with out-of-order workflow definition.
+        Pre-complete first step (A), then recover — remaining steps (B, C)
+        should execute in dependency order using correct configs."""
+        wf = CreateWorkflowRequest(
+            name="recovery-ooo",
+            steps=[
+                WorkflowStep(id="C", type="task",
+                    config=WorkflowStepConfig(action="c", duration_seconds=0.01),
+                    depends_on=["B"]),
+                WorkflowStep(id="A", type="task",
+                    config=WorkflowStepConfig(action="a", duration_seconds=0.01),
+                    depends_on=[]),
+                WorkflowStep(id="B", type="task",
+                    config=WorkflowStepConfig(action="b", duration_seconds=0.01),
+                    depends_on=["A"]),
+            ],
+        )
+        _, run_id, step_rows = _create_full_run(conn, wf)
+
+        # Verify topo sort ordered them correctly
+        assert [s["step_id"] for s in step_rows] == ["A", "B", "C"]
+
+        # Simulate crash: run is "running", first step completed
+        update_run_status(conn, run_id, "running", started_at=_now())
+        idem_key = str(uuid.uuid4())
+        update_step_status(
+            conn, step_rows[0]["id"], "completed",
+            idempotency_key=idem_key, started_at=_now(), completed_at=_now(),
+        )
+        insert_step_result(conn, idem_key, step_rows[0]["id"], {"status": "success"})
+        conn.commit()
+
+        # Recovery resumes and finishes remaining steps
+        threads = recover_interrupted_runs()
+        assert len(threads) == 1
+        threads[0].join(timeout=10)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        steps = get_steps_for_run(conn, run_id)
+        assert all(s["status"] == "completed" for s in steps)
+        # First step was not re-executed
+        assert steps[0]["retry_count"] == 0
+
+    def test_topological_sort_unit(self):
+        """Direct unit test of topological_sort function."""
+        steps = [
+            WorkflowStep(id="D", type="task",
+                config=WorkflowStepConfig(action="d"),
+                depends_on=["B", "C"]),
+            WorkflowStep(id="B", type="task",
+                config=WorkflowStepConfig(action="b"),
+                depends_on=["A"]),
+            WorkflowStep(id="A", type="task",
+                config=WorkflowStepConfig(action="a"),
+                depends_on=[]),
+            WorkflowStep(id="C", type="task",
+                config=WorkflowStepConfig(action="c"),
+                depends_on=["A"]),
+        ]
+        result = topological_sort(steps)
+        result_ids = [s.id for s in result]
+        # A must come before B and C; B and C must come before D
+        assert result_ids.index("A") < result_ids.index("B")
+        assert result_ids.index("A") < result_ids.index("C")
+        assert result_ids.index("B") < result_ids.index("D")
+        assert result_ids.index("C") < result_ids.index("D")

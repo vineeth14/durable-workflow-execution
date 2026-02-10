@@ -26,16 +26,41 @@ class CreateWorkflowRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_steps(self) -> "CreateWorkflowRequest":
-        seen_ids: set[str] = set()
+        # Pass 1: check for duplicate step IDs and collect all IDs
+        all_ids: set[str] = set()
         for step in self.steps:
-            if step.id in seen_ids:
+            if step.id in all_ids:
                 raise ValueError(f"Duplicate step id: '{step.id}'")
+            all_ids.add(step.id)
+
+        # Pass 2: check that all depends_on references exist
+        for step in self.steps:
             for dep in step.depends_on:
-                if dep not in seen_ids:
+                if dep not in all_ids:
                     raise ValueError(
-                        f"Step '{step.id}' depends on '{dep}' which has not appeared earlier"
+                        f"Step '{step.id}' depends on '{dep}' which is not defined in this workflow"
                     )
-            seen_ids.add(step.id)
+
+        # Pass 3: cycle detection via Kahn's algorithm
+        in_degree = {step.id: len(step.depends_on) for step in self.steps}
+        dependents: dict[str, list[str]] = {step.id: [] for step in self.steps}
+        for step in self.steps:
+            for dep in step.depends_on:
+                dependents[dep].append(step.id)
+
+        queue = [sid for sid in in_degree if in_degree[sid] == 0]
+        visited = 0
+        while queue:
+            current = queue.pop(0)
+            visited += 1
+            for dependent_id in dependents[current]:
+                in_degree[dependent_id] -= 1
+                if in_degree[dependent_id] == 0:
+                    queue.append(dependent_id)
+
+        if visited != len(self.steps):
+            raise ValueError("Circular dependency detected among workflow steps")
+
         return self
 
 

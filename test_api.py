@@ -255,6 +255,28 @@ class TestValidation:
         })
         assert resp.status_code == 422
 
+    def test_forward_reference_accepted(self, client):
+        """depends_on can reference a step defined later in the array."""
+        resp = client.post("/workflows", json={
+            "name": "forward-ref",
+            "steps": [
+                {"id": "B", "type": "task", "config": {"action": "b"}, "depends_on": ["A"]},
+                {"id": "A", "type": "task", "config": {"action": "a"}, "depends_on": []},
+            ],
+        })
+        assert resp.status_code == 201
+
+    def test_cycle_rejected(self, client):
+        """Circular dependencies return 422."""
+        resp = client.post("/workflows", json={
+            "name": "cycle",
+            "steps": [
+                {"id": "A", "type": "task", "config": {"action": "a"}, "depends_on": ["B"]},
+                {"id": "B", "type": "task", "config": {"action": "b"}, "depends_on": ["A"]},
+            ],
+        })
+        assert resp.status_code == 422
+
     def test_order_negative_amount(self, client):
         resp = client.post("/orders", json={"amount": -10})
         assert resp.status_code == 422

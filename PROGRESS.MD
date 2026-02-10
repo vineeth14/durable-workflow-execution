@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 9 - Documentation
+**Active Phase**: Phase 9 - Documentation (Phase 10 complete)
 **Last Updated**: 2026-02-10
 
 ---
@@ -23,6 +23,7 @@
 | 7 | API Routes | COMPLETE | 8 endpoints in main.py, CORS, startup event, 29 API tests |
 | 8 | Frontend | COMPLETE | index.html, run.html, style.css — vanilla JS, polling, order demo |
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
+| 10 | Dependency-Ordered Execution | COMPLETE | topological_sort, relaxed validation, cycle detection, 10 new tests |
 
 ---
 
@@ -35,13 +36,13 @@
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
-| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD (Phase 4) + execution loop (Phase 5) + crash recovery (Phase 6) |
-| static/index.html | Dashboard frontend | DONE - workflow submit, auto-refreshing runs table, order demo |
+| executor.py | CRUD helpers + execution loop + recovery + topo sort | DONE - CRUD (Phase 4) + execution loop (Phase 5) + crash recovery (Phase 6) + topological_sort (Phase 10) |
+| static/index.html | Dashboard frontend | DONE - workflow submit, auto-refreshing runs table (orders demo commented out) |
 | static/run.html | Run detail frontend | DONE - real-time step visualization with polling |
 | static/style.css | Frontend styling | DONE - status colors, clean minimal layout |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
-| test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery | DONE - 38 tests |
-| test_api.py | API route tests — lifecycle, validation, failures, durability | DONE - 29 tests |
+| test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery + topo sort | DONE - 48 tests |
+| test_api.py | API route tests — lifecycle, validation, failures, durability + topo sort | DONE - 31 tests |
 | README.md | Setup instructions | EXISTS - empty |
 
 ---
@@ -129,6 +130,18 @@
 - [ ] README.md - setup, run, test instructions
 - [ ] DECISIONS.md - tech choices, trade-offs, future improvements
 
+### Phase 10: Dependency-Ordered Execution
+- [x] Add `topological_sort(steps)` function in executor.py
+  - [x] Kahn's algorithm (BFS-based) for deterministic ordering
+  - [x] Cycle detection — raises ValueError on circular dependencies
+  - [x] Stable: preserves original array order when dependencies allow
+- [x] Update `create_steps()` to topo-sort before assigning `step_index`
+- [x] Relax `CreateWorkflowRequest.validate_steps()` — allow `depends_on` to reference any step ID (not just earlier ones)
+- [x] Keep cycle detection in validation (reject at API level, not just at run creation)
+- [x] Tests for topo sort: diamond dependencies, out-of-order input, cycles, no dependencies
+- [x] Verify: existing tests still pass (execution loop + crash recovery unchanged)
+- [x] Comment out orders demo UI from frontend (API routes still available)
+
 ---
 
 ## Verification Checkpoints
@@ -144,6 +157,7 @@
 | All API endpoints respond correctly via curl | 7 | YES |
 | Frontend shows real-time step updates in browser | 8 | PENDING USER VERIFICATION |
 | README instructions work from scratch | 9 | NO |
+| Out-of-order depends_on produces correct step_index; cycles rejected | 10 | YES |
 
 ---
 
@@ -162,3 +176,4 @@ _Track any issues encountered or decisions made during implementation._
 - **DB dependency injection**: `get_db()` generator with `Depends()` gives each request its own connection, closed in `finally`.
 - **Step row mapping**: `_step_to_response()` explicitly maps fields to `StepStateResponse` because `SELECT *` returns extra columns (`run_id`, `idempotency_key`, `created_at`) not in the model. Other models use `**dict(row)` where SQL aliases match exactly.
 - **`on_event("startup")`**: Used despite deprecation warning because the project is sync-only (no async/await). Works fine.
+- **Dependency-ordered execution (Phase 10)**: Topo sort at run creation time (Option 1). `step_index` reflects dependency order, execution loop unchanged. Validation relaxed to allow any-order `depends_on` references; cycle detection added instead.

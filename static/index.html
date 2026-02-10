@@ -86,7 +86,8 @@
       <p id="runs-empty" style="color:#888; font-size:0.85rem; display:none;">No runs yet.</p>
     </section>
 
-    <!-- Orders Demo -->
+    <!-- Orders Demo (hidden — API routes still available at /orders) -->
+    <!--
     <section>
       <h2>Orders (Demo)</h2>
       <div class="form-row">
@@ -101,6 +102,7 @@
       </div>
       <div id="order-result" class="order-result" style="display:none;"></div>
     </section>
+    -->
   </div>
 
 <script>
@@ -223,8 +225,8 @@ async function refreshRuns() {
   }
 }
 
-// --- Orders ---
-
+// --- Orders (commented out — API routes still available at /orders) ---
+/*
 async function createOrder() {
   const resEl = document.getElementById('order-result');
   const amount = parseFloat(document.getElementById('order-amount').value);
@@ -252,6 +254,7 @@ async function lookupOrder() {
     resEl.style.display = 'block';
   }
 }
+*/
 
 // --- Helpers ---
 

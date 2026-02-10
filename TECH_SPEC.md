@@ -127,7 +127,7 @@ On server restart: "running" runs are candidates for recovery.
 
 ### Key Design Decisions
 
-- **Sequential execution only** - steps run in order (0, 1, 2, ...). `depends_on` is validated but not used for scheduling.
+- **Sequential execution, dependency-ordered** - steps run one at a time, but `step_index` is assigned via topological sort of `depends_on` at run creation time. JSON array order doesn't need to match dependency order.
 - **One background thread per run** - daemon threads, own DB connection each.
 - **Immediate retries** - no exponential backoff.
 
@@ -491,11 +491,31 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 
 ---
 
+## Dependency-Ordered Execution (Phase 10)
+
+### Overview
+
+Steps are ordered by their `depends_on` graph rather than JSON array position. A `topological_sort(steps)` function computes the execution order at run creation time and assigns `step_index` accordingly. The execution loop remains unchanged — it still processes steps sequentially by `step_index`.
+
+### Design
+
+- **Topological sort at run creation**: `create_steps()` calls `topological_sort()` before assigning `step_index` values.
+- **Stable sort**: If the input array already respects dependencies, the original order is preserved.
+- **Cycle detection**: Validation rejects workflows with circular dependencies (raises `ValueError`).
+- **No execution loop changes**: The executor still iterates `step_index` 0, 1, 2, ... — it just trusts that the index reflects a valid dependency order.
+- **No crash recovery changes**: Recovery still skips completed steps and re-executes pending/running ones in `step_index` order, which is guaranteed to be a valid topological order.
+
+### Validation Changes
+
+- `CreateWorkflowRequest.validate_steps()`: Relaxed — `depends_on` may reference any step ID in the workflow, not just earlier ones in the array. Cycle detection replaces the forward-reference check.
+
+---
+
 ## Known Limitations
 
 - Step-level durability only (no sub-step checkpointing)
 - SQLite single-writer limits concurrent write throughput
-- Sequential execution only (no parallel steps)
+- Sequential execution only (no parallel steps, but dependency-ordered)
 - No exponential backoff on retries
 - External API calls may be duplicated on recovery
 - No authentication or multi-tenancy
@@ -503,7 +523,7 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 ## Future Improvements
 
 - Postgres for concurrency + distributed deployment
-- Parallel step execution via topological sort
+- Parallel execution of independent steps (concurrent threads within a run)
 - Configurable retry policies with backoff
 - Sub-step checkpointing
 - External idempotency keys for payment APIs

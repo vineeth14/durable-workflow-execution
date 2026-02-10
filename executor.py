@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import threading
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 
 from models import WorkflowStepConfig
@@ -126,7 +127,8 @@ def create_steps(conn: sqlite3.Connection, run_id: str, steps_definition: list) 
     Returns the created step rows ordered by step_index.
     """
     now = _now()
-    for index, step in enumerate(steps_definition):
+    sorted_steps = topological_sort(steps_definition)
+    for index, step in enumerate(sorted_steps):
         step_uuid = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO steps "
@@ -199,6 +201,61 @@ def check_step_result(conn: sqlite3.Connection, idempotency_key: str) -> sqlite3
         "SELECT * FROM step_results WHERE idempotency_key = ?",
         (idempotency_key,),
     ).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Step Ordering (Dependency Graph)
+# ---------------------------------------------------------------------------
+
+
+def topological_sort(steps: list) -> list:
+    """Return steps in dependency order using Kahn's algorithm (BFS).
+
+    Guarantees:
+    - Every step appears after all of its dependencies.
+    - Stable: when multiple steps are ready, they appear in their
+      original array order.
+    - Raises ValueError on circular dependencies.
+
+    steps: list of objects with .id (str) and .depends_on (list[str]).
+    Returns: new list in topologically sorted order.
+    """
+    id_to_step = {}
+    in_degree = {}
+    dependents: dict[str, list[str]] = {}
+    original_index = {}
+
+    for idx, step in enumerate(steps):
+        id_to_step[step.id] = step
+        in_degree[step.id] = len(step.depends_on)
+        dependents[step.id] = []
+        original_index[step.id] = idx
+
+    for step in steps:
+        for dep in step.depends_on:
+            dependents[dep].append(step.id)
+
+    # Seed queue with zero-dependency steps in original order
+    queue = deque(step.id for step in steps if in_degree[step.id] == 0)
+
+    result: list = []
+    while queue:
+        step_id = queue.popleft()
+        result.append(id_to_step[step_id])
+
+        # Collect newly-ready dependents, sort by original index for stability
+        newly_ready = []
+        for dependent_id in dependents[step_id]:
+            in_degree[dependent_id] -= 1
+            if in_degree[dependent_id] == 0:
+                newly_ready.append(dependent_id)
+        newly_ready.sort(key=lambda sid: original_index[sid])
+        queue.extend(newly_ready)
+
+    if len(result) != len(steps):
+        raise ValueError("Circular dependency detected among workflow steps")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -315,9 +372,9 @@ def execute_run(run_id: str) -> None:
             return
 
         definition = json.loads(workflow["definition"])
-        step_configs = definition["steps"]
+        step_configs_by_id = {s["id"]: s["config"] for s in definition["steps"]}
         logger.info("Run %s: starting execution (workflow='%s', steps=%d)",
-                     run_id, run["workflow_name"], len(step_configs))
+                     run_id, run["workflow_name"], len(step_configs_by_id))
 
         # Mark run as running (skip if already running — crash recovery case)
         if run["status"] != "running":
@@ -334,8 +391,8 @@ def execute_run(run_id: str) -> None:
                 logger.info("Step %s (%s): already completed, skipping", step_row["id"], step_row["step_id"])
                 continue
 
-            # Build config from workflow definition
-            config_dict = step_configs[step_row["step_index"]]["config"]
+            # Build config from workflow definition (lookup by step ID, not array position)
+            config_dict = step_configs_by_id[step_row["step_id"]]
             step_config = WorkflowStepConfig(**config_dict)
 
             # Retry loop for this step
