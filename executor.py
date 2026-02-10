@@ -316,6 +316,8 @@ def execute_run(run_id: str) -> None:
 
         definition = json.loads(workflow["definition"])
         step_configs = definition["steps"]
+        logger.info("Run %s: starting execution (workflow='%s', steps=%d)",
+                     run_id, run["workflow_name"], len(step_configs))
 
         # Mark run as running (skip if already running — crash recovery case)
         if run["status"] != "running":
@@ -337,20 +339,27 @@ def execute_run(run_id: str) -> None:
             step_config = WorkflowStepConfig(**config_dict)
 
             # Retry loop for this step
-            while True:
-                # Re-fetch step to get current retry_count (may have been incremented)
-                current_step = get_steps_for_run(conn, run_id)
-                current = next(s for s in current_step if s["id"] == step_row["id"])
+            try:
+                while True:
+                    # Re-fetch step to get current retry_count (may have been incremented)
+                    current_step = get_steps_for_run(conn, run_id)
+                    current = next(s for s in current_step if s["id"] == step_row["id"])
 
-                outcome = execute_step(conn, current, step_config)
+                    outcome = execute_step(conn, current, step_config)
 
-                if outcome == "completed":
-                    break
-                elif outcome == "retry":
-                    continue
-                else:  # "failed"
-                    run_failed = True
-                    break
+                    if outcome == "completed":
+                        break
+                    elif outcome == "retry":
+                        continue
+                    else:  # "failed"
+                        run_failed = True
+                        break
+            except Exception:
+                logger.exception(
+                    "Run %s: unexpected error executing step '%s' (index=%d, id=%s)",
+                    run_id, step_row["step_id"], step_row["step_index"], step_row["id"],
+                )
+                raise
 
             if run_failed:
                 break
