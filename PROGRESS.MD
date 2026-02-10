@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 7 - API Routes
+**Active Phase**: Phase 8 - Frontend
 **Last Updated**: 2026-02-10
 
 ---
@@ -20,7 +20,7 @@
 | 4 | Database Helper Functions | COMPLETE | executor.py — 15 CRUD functions |
 | 5 | Execution Loop | COMPLETE | execute_step, execute_run, start_run_thread in executor.py |
 | 6 | Crash Recovery | COMPLETE | recover_interrupted_runs() + started_at preservation |
-| 7 | API Routes | NOT STARTED | FastAPI routes in main.py |
+| 7 | API Routes | COMPLETE | 8 endpoints in main.py, CORS, startup event, 29 API tests |
 | 8 | Frontend | NOT STARTED | index.html, run.html, style.css |
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
 
@@ -30,8 +30,8 @@
 
 | File | Purpose | Status |
 |------|---------|--------|
-| pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic + pytest (dev) |
-| main.py | FastAPI app + routes | EXISTS - placeholder only |
+| pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic + pytest/httpx (dev) |
+| main.py | FastAPI app + routes | DONE - 8 routes, CORS, startup event, DB dependency |
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
@@ -41,6 +41,7 @@
 | static/style.css | Frontend styling | NOT CREATED |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
 | test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery | DONE - 38 tests |
+| test_api.py | API route tests — lifecycle, validation, failures, durability | DONE - 29 tests |
 | README.md | Setup instructions | EXISTS - empty |
 
 ---
@@ -102,16 +103,20 @@
 - [x] Fixed `execute_run` to preserve `started_at` on recovery (skip status update if already "running")
 
 ### Phase 7: API Routes
-- [ ] POST /workflows (201) -> WorkflowDetailResponse
-- [ ] POST /workflows/{workflow_id}/runs (202) -> RunDetailResponse
-- [ ] GET /workflows (200) -> list[WorkflowSummaryResponse]
-- [ ] GET /workflows/{workflow_id} (200) -> WorkflowDetailResponse
-- [ ] GET /runs (200) -> list[RunSummaryResponse] (with workflow_name via JOIN)
-- [ ] GET /runs/{run_id} (200) -> RunDetailResponse (with steps)
-- [ ] POST /orders (201) -> OrderResponse
-- [ ] GET /orders/{order_id} (200) -> OrderResponse
-- [ ] CORS middleware for frontend
-- [ ] Startup event calls init_db() + recover_interrupted_runs()
+- [x] POST /workflows (201) -> WorkflowDetailResponse
+- [x] POST /workflows/{workflow_id}/runs (202) -> RunDetailResponse
+- [x] GET /workflows (200) -> list[WorkflowSummaryResponse]
+- [x] GET /workflows/{workflow_id} (200) -> WorkflowDetailResponse
+- [x] GET /runs (200) -> list[RunSummaryResponse] (with workflow_name via JOIN)
+- [x] GET /runs/{run_id} (200) -> RunDetailResponse (with steps)
+- [x] POST /orders (201) -> OrderResponse
+- [x] GET /orders/{order_id} (200) -> OrderResponse
+- [x] CORS middleware for frontend
+- [x] Startup event calls init_db() + recover_interrupted_runs()
+- [x] DB connection dependency injection (get_db with Depends)
+- [x] 404 handling for nonexistent resources
+- [x] Static file mount prep for Phase 8
+- [x] API tests: 29 tests (lifecycle, validation, failures, durability)
 
 ### Phase 8: Frontend
 - [ ] index.html - workflow submission form + runs list table
@@ -136,7 +141,7 @@
 | CRUD round-trip works | 4 | YES |
 | 3-step workflow completes sequentially | 5 | YES |
 | Crash recovery resumes without re-executing completed steps | 6 | YES |
-| All API endpoints respond correctly via curl | 7 | NO |
+| All API endpoints respond correctly via curl | 7 | YES |
 | Frontend shows real-time step updates in browser | 8 | NO |
 | README instructions work from scratch | 9 | NO |
 
@@ -154,3 +159,6 @@ _Track any issues encountered or decisions made during implementation._
 - **Commit policy**: Standalone creates (create_workflow, create_run, create_steps, create_order) commit. Updates used by execution loop (update_step_status, insert_step_result, update_run_status) do NOT commit — caller controls transactions for atomicity.
 - **update_step_status / update_run_status**: Use **kwargs with allowlist for flexible field updates.
 - **Idempotency key reuse**: `execute_step` reuses existing idempotency key on crash recovery instead of always generating a new one. Without this, the idempotency check was dead code.
+- **DB dependency injection**: `get_db()` generator with `Depends()` gives each request its own connection, closed in `finally`.
+- **Step row mapping**: `_step_to_response()` explicitly maps fields to `StepStateResponse` because `SELECT *` returns extra columns (`run_id`, `idempotency_key`, `created_at`) not in the model. Other models use `**dict(row)` where SQL aliases match exactly.
+- **`on_event("startup")`**: Used despite deprecation warning because the project is sync-only (no async/await). Works fine.
