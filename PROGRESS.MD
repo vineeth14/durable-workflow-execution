@@ -5,7 +5,7 @@
 
 ## Current Status
 
-**Active Phase**: Phase 4 - Database Helper Functions
+**Active Phase**: Phase 5 - Execution Loop
 **Last Updated**: 2026-02-09
 
 ---
@@ -17,7 +17,7 @@
 | 1 | Project Setup and Database | COMPLETE | deps installed, database.py with all 5 tables |
 | 2 | Pydantic Models | COMPLETE | models.py |
 | 3 | Task Execution | COMPLETE | tasks.py |
-| 4 | Database Helper Functions | NOT STARTED | CRUD in executor.py |
+| 4 | Database Helper Functions | COMPLETE | executor.py — 15 CRUD functions |
 | 5 | Execution Loop | NOT STARTED | Step execution + run loop in executor.py |
 | 6 | Crash Recovery | NOT STARTED | Startup recovery routine |
 | 7 | API Routes | NOT STARTED | FastAPI routes in main.py |
@@ -35,7 +35,7 @@
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
-| executor.py | CRUD helpers + execution loop + recovery | NOT CREATED |
+| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD helpers (Phase 4) |
 | static/index.html | Dashboard frontend | NOT CREATED |
 | static/run.html | Run detail frontend | NOT CREATED |
 | static/style.css | Frontend styling | NOT CREATED |
@@ -71,19 +71,20 @@
 - [x] Returns result dict on success, raises TaskExecutionError on failure
 
 ### Phase 4: Database Helper Functions
-- [ ] create_workflow(conn, name, definition_json) -> workflow_id
-- [ ] create_run(conn, workflow_id) -> run_id
-- [ ] create_steps(conn, run_id, steps_definition) -> list of step records
-- [ ] get_all_workflows(conn) -> list of workflow summary records
-- [ ] get_workflow(conn, workflow_id) -> full workflow record or None
-- [ ] get_all_runs(conn) -> list of run records with workflow_name (JOIN on workflows)
-- [ ] get_run_detail(conn, run_id) -> run record with workflow_name (JOIN) or None
-- [ ] get_steps_for_run(conn, run_id) -> ordered by step_index
-- [ ] update_step_status(conn, step_id, status, ...)
-- [ ] insert_step_result(conn, idempotency_key, step_id, result_data)
-- [ ] check_step_result(conn, idempotency_key) -> result or None
-- [ ] get_running_runs(conn) -> list of run records (for crash recovery)
-- [ ] Order CRUD helpers (create_order, get_order)
+- [x] create_workflow(conn, name, definition_json) -> workflow_id
+- [x] create_run(conn, workflow_id) -> run_id
+- [x] create_steps(conn, run_id, steps_definition) -> list of step records
+- [x] get_all_workflows(conn) -> list of workflow summary records
+- [x] get_workflow(conn, workflow_id) -> full workflow record or None
+- [x] get_all_runs(conn) -> list of run records with workflow_name (JOIN on workflows)
+- [x] get_run_detail(conn, run_id) -> run record with workflow_name (JOIN) or None
+- [x] get_steps_for_run(conn, run_id) -> ordered by step_index
+- [x] update_step_status(conn, step_id, status, **kwargs)
+- [x] insert_step_result(conn, idempotency_key, step_id, result_data)
+- [x] check_step_result(conn, idempotency_key) -> result or None
+- [x] get_running_runs(conn) -> list of run records (for crash recovery)
+- [x] Order CRUD helpers (create_order, get_order)
+- [x] update_run_status(conn, run_id, status, **kwargs) — bonus, needed by Phase 5
 
 ### Phase 5: Execution Loop
 - [ ] `execute_run(run_id)` - main loop running in background thread
@@ -128,7 +129,7 @@
 | All 5 tables created in SQLite | 1 | YES |
 | Models validate/reject correctly | 2 | YES |
 | Task executor sleeps, succeeds, fails as configured | 3 | YES |
-| CRUD round-trip works | 4 | NO |
+| CRUD round-trip works | 4 | YES |
 | 3-step workflow completes sequentially | 5 | NO |
 | Crash recovery resumes without re-executing completed steps | 6 | NO |
 | All API endpoints respond correctly via curl | 7 | NO |
@@ -145,3 +146,6 @@ _Track any issues encountered or decisions made during implementation._
 - **`type` field**: Free-form string on WorkflowStep, not validated to "task". Extensible for future step types.
 - **List vs detail responses**: GET /workflows list excludes `definition`; GET /runs list excludes `steps` but includes `workflow_name` via JOIN. Detail endpoints return full data.
 - **CreateOrderRequest**: Only `amount` field. Status defaults to "pending", timestamps auto-generated.
+- **CRUD return types**: executor.py returns sqlite3.Row objects (no Pydantic imports). SQL aliases match Pydantic field names for easy `Model(**dict(row))` in API layer.
+- **Commit policy**: Standalone creates (create_workflow, create_run, create_steps, create_order) commit. Updates used by execution loop (update_step_status, insert_step_result, update_run_status) do NOT commit — caller controls transactions for atomicity.
+- **update_step_status / update_run_status**: Use **kwargs with allowlist for flexible field updates.
