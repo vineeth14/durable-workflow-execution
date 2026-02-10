@@ -317,9 +317,10 @@ def execute_run(run_id: str) -> None:
         definition = json.loads(workflow["definition"])
         step_configs = definition["steps"]
 
-        # Mark run as running
-        update_run_status(conn, run_id, "running", started_at=_now())
-        conn.commit()
+        # Mark run as running (skip if already running — crash recovery case)
+        if run["status"] != "running":
+            update_run_status(conn, run_id, "running", started_at=_now())
+            conn.commit()
 
         # Process steps sequentially
         steps = get_steps_for_run(conn, run_id)
@@ -376,3 +377,34 @@ def start_run_thread(run_id: str) -> threading.Thread:
     thread = threading.Thread(target=execute_run, args=(run_id,), daemon=True)
     thread.start()
     return thread
+
+
+# ---------------------------------------------------------------------------
+# Crash Recovery (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+def recover_interrupted_runs() -> list[threading.Thread]:
+    """Find all runs with status='running' and resume them in background threads.
+
+    Called at startup before accepting HTTP requests.
+    Returns list of spawned threads (useful for testing).
+    """
+    from database import get_connection
+
+    conn = get_connection()
+    try:
+        running = get_running_runs(conn)
+        if not running:
+            logger.info("Recovery: no interrupted runs found")
+            return []
+
+        logger.info("Recovery: found %d interrupted run(s)", len(running))
+        threads = []
+        for run in running:
+            run_id = run["id"]
+            logger.info("Recovery: resuming run %s", run_id)
+            threads.append(start_run_thread(run_id))
+        return threads
+    finally:
+        conn.close()

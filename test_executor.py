@@ -32,6 +32,7 @@ from executor import (
     get_steps_for_run,
     get_workflow,
     insert_step_result,
+    recover_interrupted_runs,
     start_run_thread,
     update_run_status,
     update_step_status,
@@ -850,3 +851,92 @@ class TestExecuteRun:
 
         run = get_run_detail(conn, run_id)
         assert run["status"] == "completed"
+
+
+# ==================================================================
+# Test 11: recover_interrupted_runs — crash recovery (Phase 6)
+# ==================================================================
+class TestCrashRecovery:
+    def test_recover_no_interrupted_runs(self, conn):
+        """No running runs → returns empty list, no threads spawned."""
+        threads = recover_interrupted_runs()
+        assert threads == []
+
+    def test_recover_single_interrupted_run(self, conn, sample_workflow):
+        """One 'running' run is found and resumed to completion."""
+        _, run_id, _ = _create_full_run(conn, sample_workflow)
+
+        # Simulate crash: run is "running", all steps still "pending"
+        update_run_status(conn, run_id, "running", started_at=_now())
+        conn.commit()
+
+        threads = recover_interrupted_runs()
+        assert len(threads) == 1
+        threads[0].join(timeout=10)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+        assert all(s["status"] == "completed" for s in get_steps_for_run(conn, run_id))
+
+    def test_recover_multiple_interrupted_runs(self, conn, sample_workflow):
+        """Two 'running' runs are both resumed."""
+        wf_id = create_workflow(conn, sample_workflow.name, json.dumps(sample_workflow.model_dump()))
+
+        run_a_id = create_run(conn, wf_id)
+        create_steps(conn, run_a_id, sample_workflow.steps)
+        update_run_status(conn, run_a_id, "running", started_at=_now())
+
+        run_b_id = create_run(conn, wf_id)
+        create_steps(conn, run_b_id, sample_workflow.steps)
+        update_run_status(conn, run_b_id, "running", started_at=_now())
+        conn.commit()
+
+        threads = recover_interrupted_runs()
+        assert len(threads) == 2
+        for t in threads:
+            t.join(timeout=10)
+
+        assert get_run_detail(conn, run_a_id)["status"] == "completed"
+        assert get_run_detail(conn, run_b_id)["status"] == "completed"
+
+    def test_recover_ignores_completed_and_pending(self, conn, sample_workflow):
+        """Only 'running' runs are recovered — completed and pending are ignored."""
+        wf_id = create_workflow(conn, sample_workflow.name, json.dumps(sample_workflow.model_dump()))
+
+        # Completed run
+        run_done_id = create_run(conn, wf_id)
+        update_run_status(conn, run_done_id, "completed", completed_at=_now())
+        conn.commit()
+
+        # Pending run
+        run_pending_id = create_run(conn, wf_id)
+
+        # Running run (the only one that should be recovered)
+        run_active_id = create_run(conn, wf_id)
+        create_steps(conn, run_active_id, sample_workflow.steps)
+        update_run_status(conn, run_active_id, "running", started_at=_now())
+        conn.commit()
+
+        threads = recover_interrupted_runs()
+        assert len(threads) == 1
+        threads[0].join(timeout=10)
+
+        assert get_run_detail(conn, run_active_id)["status"] == "completed"
+        assert get_run_detail(conn, run_done_id)["status"] == "completed"
+        assert get_run_detail(conn, run_pending_id)["status"] == "pending"
+
+    def test_started_at_preserved_on_recovery(self, conn, sample_workflow):
+        """Recovery should NOT overwrite the original started_at timestamp."""
+        _, run_id, _ = _create_full_run(conn, sample_workflow)
+
+        original_started_at = "2025-01-01T00:00:00+00:00"
+        update_run_status(conn, run_id, "running", started_at=original_started_at)
+        conn.commit()
+
+        threads = recover_interrupted_runs()
+        assert len(threads) == 1
+        threads[0].join(timeout=10)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+        assert run["started_at"] == original_started_at

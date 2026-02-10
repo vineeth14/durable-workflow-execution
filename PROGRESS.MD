@@ -5,8 +5,8 @@
 
 ## Current Status
 
-**Active Phase**: Phase 6 - Crash Recovery
-**Last Updated**: 2026-02-09
+**Active Phase**: Phase 7 - API Routes
+**Last Updated**: 2026-02-10
 
 ---
 
@@ -19,7 +19,7 @@
 | 3 | Task Execution | COMPLETE | tasks.py |
 | 4 | Database Helper Functions | COMPLETE | executor.py — 15 CRUD functions |
 | 5 | Execution Loop | COMPLETE | execute_step, execute_run, start_run_thread in executor.py |
-| 6 | Crash Recovery | NOT STARTED | Startup recovery routine |
+| 6 | Crash Recovery | COMPLETE | recover_interrupted_runs() + started_at preservation |
 | 7 | API Routes | NOT STARTED | FastAPI routes in main.py |
 | 8 | Frontend | NOT STARTED | index.html, run.html, style.css |
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
@@ -35,12 +35,12 @@
 | database.py | DB connection handling + schema init | DONE |
 | models.py | Pydantic request/response models | DONE |
 | tasks.py | Simulated task executor | DONE |
-| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD (Phase 4) + execution loop (Phase 5) |
+| executor.py | CRUD helpers + execution loop + recovery | DONE - CRUD (Phase 4) + execution loop (Phase 5) + crash recovery (Phase 6) |
 | static/index.html | Dashboard frontend | NOT CREATED |
 | static/run.html | Run detail frontend | NOT CREATED |
 | static/style.css | Frontend styling | NOT CREATED |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
-| test_executor.py | Pytest tests for executor.py CRUD + execution loop | DONE - 33 tests |
+| test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery | DONE - 38 tests |
 | README.md | Setup instructions | EXISTS - empty |
 
 ---
@@ -96,9 +96,10 @@
 - [x] Crash recovery: skips completed steps, re-executes pending/running steps
 
 ### Phase 6: Crash Recovery
-- [ ] `recover_interrupted_runs()` - called at startup before accepting requests
-- [ ] Spawns background threads for each "running" run
-- [ ] Same execution loop handles skipping completed steps
+- [x] `recover_interrupted_runs()` - called at startup before accepting requests
+- [x] Spawns background threads for each "running" run
+- [x] Same execution loop handles skipping completed steps
+- [x] Fixed `execute_run` to preserve `started_at` on recovery (skip status update if already "running")
 
 ### Phase 7: API Routes
 - [ ] POST /workflows (201) -> WorkflowDetailResponse
@@ -134,7 +135,7 @@
 | Task executor sleeps, succeeds, fails as configured | 3 | YES |
 | CRUD round-trip works | 4 | YES |
 | 3-step workflow completes sequentially | 5 | YES |
-| Crash recovery resumes without re-executing completed steps | 6 | NO |
+| Crash recovery resumes without re-executing completed steps | 6 | YES |
 | All API endpoints respond correctly via curl | 7 | NO |
 | Frontend shows real-time step updates in browser | 8 | NO |
 | README instructions work from scratch | 9 | NO |
