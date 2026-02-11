@@ -62,9 +62,12 @@
     }
   ]
 }'></textarea>
-      <div style="display:flex; gap:8px;">
+      <div style="display:flex; gap:8px; align-items:center;">
         <button id="submit-btn" onclick="submitWorkflow()">Start Workflow</button>
         <button id="format-btn" onclick="formatJSON()" style="background:#555;">Format JSON</button>
+        <label style="cursor:pointer; font-size:0.85rem; color:#2196F3; margin-left:4px;">
+          Upload .json <input type="file" id="file-upload" accept=".json" onchange="uploadFile(event)" style="display:none;">
+        </label>
       </div>
       <div id="submit-error" class="error"></div>
     </section>
@@ -113,7 +116,20 @@ async function api(method, path, body) {
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+  if (!res.ok) {
+    let msg;
+    if (typeof data.detail === 'string') {
+      msg = data.detail;
+    } else if (Array.isArray(data.detail)) {
+      msg = data.detail.map(e => {
+        const field = Array.isArray(e.loc) ? e.loc.filter(l => l !== 'body').join(' > ') : '';
+        return field ? field + ': ' + e.msg : (e.msg || JSON.stringify(e));
+      }).join('; ');
+    } else {
+      msg = JSON.stringify(data);
+    }
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -147,6 +163,20 @@ function formatJSON() {
   }
   ta.value = JSON.stringify(parsed, null, 2);
   errEl.textContent = '';
+}
+
+// --- File upload ---
+
+function uploadFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('workflow-json').value = e.target.result;
+    formatJSON();
+  };
+  reader.readAsText(file);
+  event.target.value = '';
 }
 
 // --- Workflow submission ---

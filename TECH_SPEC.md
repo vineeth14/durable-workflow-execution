@@ -351,6 +351,7 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 ### Dashboard (index.html)
 
 - Textarea for pasting workflow JSON (with placeholder example)
+- File upload: "Upload .json" button reads a `.json` file and populates the textarea (user still clicks "Start Workflow" to submit)
 - "Start Workflow" button + validation feedback
 - On submit: POST /workflows -> POST /workflows/{id}/runs -> redirect to run detail
 - Runs list table: workflow name, status (color-coded), started time, duration

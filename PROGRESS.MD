@@ -24,6 +24,7 @@
 | 8 | Frontend | COMPLETE | index.html, run.html, style.css — vanilla JS, polling, order demo |
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
 | 10 | Dependency-Ordered Execution | COMPLETE | topological_sort, relaxed validation, cycle detection, 10 new tests |
+| 11 | File Upload | COMPLETE | Upload .json file to populate textarea on dashboard |
 
 ---
 
@@ -142,6 +143,12 @@
 - [x] Verify: existing tests still pass (execution loop + crash recovery unchanged)
 - [x] Comment out orders demo UI from frontend (API routes still available)
 
+### Phase 11: File Upload
+- [x] Add "Upload .json" file input to dashboard (index.html)
+- [x] Read file contents via FileReader API, populate textarea
+- [x] Auto-format the loaded JSON in the textarea
+- **Verify**: upload a .json file, confirm textarea is populated, click Start Workflow to execute
+
 ---
 
 ## Verification Checkpoints
@@ -158,6 +165,7 @@
 | Frontend shows real-time step updates in browser | 8 | PENDING USER VERIFICATION |
 | README instructions work from scratch | 9 | NO |
 | Out-of-order depends_on produces correct step_index; cycles rejected | 10 | YES |
+| Upload .json file populates textarea, workflow submits successfully | 11 | PENDING USER VERIFICATION |
 
 ---
 
