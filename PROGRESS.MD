@@ -5,8 +5,8 @@
 
 ## Current Status
 
-**Active Phase**: Phase 9 - Documentation (Phase 10 complete)
-**Last Updated**: 2026-02-10
+**Active Phase**: Phase 12 - COMPLETE
+**Last Updated**: 2026-02-12
 
 ---
 
@@ -25,6 +25,7 @@
 | 9 | Documentation | NOT STARTED | README.md, DECISIONS.md |
 | 10 | Dependency-Ordered Execution | COMPLETE | topological_sort, relaxed validation, cycle detection, 10 new tests |
 | 11 | File Upload | COMPLETE | Upload .json file to populate textarea on dashboard |
+| 12 | Action Dispatch & Business Logic | COMPLETE | actions.py, order_id on runs, dispatch in execute_step, 21 new tests |
 
 ---
 
@@ -33,18 +34,22 @@
 | File | Purpose | Status |
 |------|---------|--------|
 | pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic + pytest/httpx (dev) |
-| main.py | FastAPI app + routes | DONE - 8 routes, CORS, startup event, DB dependency |
-| database.py | DB connection handling + schema init | DONE |
-| models.py | Pydantic request/response models | DONE |
+| main.py | FastAPI app + routes | DONE - 8 routes, CORS, startup event, DB dependency, optional order_id on run creation |
+| database.py | DB connection handling + schema init | DONE - order_id column on runs table |
+| models.py | Pydantic request/response models | DONE - StartRunRequest, order_id on RunSummaryResponse/RunDetailResponse |
 | tasks.py | Simulated task executor | DONE |
-| executor.py | CRUD helpers + execution loop + recovery + topo sort | DONE - CRUD (Phase 4) + execution loop (Phase 5) + crash recovery (Phase 6) + topological_sort (Phase 10) |
+| executor.py | CRUD helpers + execution loop + recovery + topo sort | DONE - create_run accepts order_id, execute_step dispatches actions, get_all_runs/get_run_detail return order_id |
+| actions.py | ACTION_REGISTRY + action functions + dispatch_action | DONE - validate_order, charge_payment, ship_order, send_notification |
 | static/index.html | Dashboard frontend | DONE - workflow submit, auto-refreshing runs table (orders demo commented out) |
 | static/run.html | Run detail frontend | DONE - real-time step visualization with polling |
 | static/style.css | Frontend styling | DONE - status colors, clean minimal layout |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
-| test_executor.py | Pytest tests for executor.py CRUD + execution loop + recovery + topo sort | DONE - 48 tests |
-| test_api.py | API route tests — lifecycle, validation, failures, durability + topo sort | DONE - 31 tests |
+| test_executor.py | Pytest tests for executor.py + actions.py | DONE - 64 tests (48 existing + 16 Phase 12) |
+| test_api.py | API route tests — lifecycle, validation, failures, durability, action dispatch | DONE - 36 tests (31 existing + 5 Phase 12) |
 | README.md | Setup instructions | EXISTS - empty |
+| examples/order-processing.json | Sample order-processing workflow (validate→charge→ship) | DONE |
+| examples/simple-pipeline.json | Sample ETL pipeline (fetch→transform→load) | DONE |
+| examples/diamond-workflow.json | Sample diamond dependency graph | DONE |
 
 ---
 
@@ -65,10 +70,11 @@
 - [x] CreateWorkflowRequest (name, steps) with validation
 - [x] WorkflowSummaryResponse (id, name, created_at — for list endpoint)
 - [x] WorkflowDetailResponse (id, name, definition, created_at — for detail endpoint)
-- [x] RunSummaryResponse (id, workflow_id, workflow_name, status, started_at, completed_at — for list endpoint)
-- [x] RunDetailResponse (id, workflow_id, workflow_name, status, started_at, completed_at, steps — for detail endpoint)
+- [x] RunSummaryResponse (id, workflow_id, workflow_name, order_id, status, started_at, completed_at — for list endpoint)
+- [x] RunDetailResponse (id, workflow_id, workflow_name, order_id, status, started_at, completed_at, steps — for detail endpoint)
 - [x] StepStateResponse (id, step_id, step_index, status, retry_count, max_retries, started_at, completed_at, error_message)
 - [x] CreateOrderRequest (amount only), OrderResponse
+- [x] StartRunRequest (optional order_id) — added Phase 12
 
 ### Phase 3: Task Execution
 - [x] `execute_task(config)` - sleep for duration, random failure based on fail_probability
@@ -76,12 +82,12 @@
 
 ### Phase 4: Database Helper Functions
 - [x] create_workflow(conn, name, definition_json) -> workflow_id
-- [x] create_run(conn, workflow_id) -> run_id
+- [x] create_run(conn, workflow_id, order_id=None) -> run_id
 - [x] create_steps(conn, run_id, steps_definition) -> list of step records
 - [x] get_all_workflows(conn) -> list of workflow summary records
 - [x] get_workflow(conn, workflow_id) -> full workflow record or None
-- [x] get_all_runs(conn) -> list of run records with workflow_name (JOIN on workflows)
-- [x] get_run_detail(conn, run_id) -> run record with workflow_name (JOIN) or None
+- [x] get_all_runs(conn) -> list of run records with workflow_name + order_id (JOIN on workflows)
+- [x] get_run_detail(conn, run_id) -> run record with workflow_name + order_id (JOIN) or None
 - [x] get_steps_for_run(conn, run_id) -> ordered by step_index
 - [x] update_step_status(conn, step_id, status, **kwargs)
 - [x] insert_step_result(conn, idempotency_key, step_id, result_data)
@@ -91,10 +97,10 @@
 - [x] update_run_status(conn, run_id, status, **kwargs) — bonus, needed by Phase 5
 
 ### Phase 5: Execution Loop
-- [x] `execute_step(conn, step_row, step_config)` - single step with idempotency
+- [x] `execute_step(conn, step_row, step_config, order_id=None)` - single step with idempotency + action dispatch
 - [x] `execute_run(run_id)` - main loop running in background thread (own DB connection)
 - [x] `start_run_thread(run_id)` - daemon thread wrapper
-- [x] Correct commit ordering: idem key + status "running" -> check result -> work -> atomic commit
+- [x] Correct commit ordering: idem key + status "running" -> check result -> work -> atomic commit (result + action + completion)
 - [x] Retry logic: increment count, fresh idem key, status back to "pending"
 - [x] Crash recovery: skips completed steps, re-executes pending/running steps
 
@@ -106,10 +112,10 @@
 
 ### Phase 7: API Routes
 - [x] POST /workflows (201) -> WorkflowDetailResponse
-- [x] POST /workflows/{workflow_id}/runs (202) -> RunDetailResponse
+- [x] POST /workflows/{workflow_id}/runs (202) -> RunDetailResponse (accepts optional order_id body)
 - [x] GET /workflows (200) -> list[WorkflowSummaryResponse]
 - [x] GET /workflows/{workflow_id} (200) -> WorkflowDetailResponse
-- [x] GET /runs (200) -> list[RunSummaryResponse] (with workflow_name via JOIN)
+- [x] GET /runs (200) -> list[RunSummaryResponse] (with workflow_name + order_id via JOIN)
 - [x] GET /runs/{run_id} (200) -> RunDetailResponse (with steps)
 - [x] POST /orders (201) -> OrderResponse
 - [x] GET /orders/{order_id} (200) -> OrderResponse
@@ -149,6 +155,35 @@
 - [x] Auto-format the loaded JSON in the textarea
 - **Verify**: upload a .json file, confirm textarea is populated, click Start Workflow to execute
 
+### Phase 12: Action Dispatch & Business Logic
+- [x] Create `actions.py` module
+  - [x] ACTION_REGISTRY dict mapping action strings to functions
+  - [x] `validate_order(conn, order_id)` — pending -> validated
+  - [x] `charge_payment(conn, order_id)` — validated -> charged
+  - [x] `ship_order(conn, order_id)` — charged -> shipped
+  - [x] `send_notification(conn, order_id)` — logs, no status change
+  - [x] `dispatch_action(conn, action, order_id)` — registry lookup + call
+- [x] Schema change
+  - [x] Add `order_id TEXT` column to runs table in `database.py` init_db()
+  - [x] Update `create_run(conn, workflow_id, order_id=None)` to accept and store order_id
+- [x] API changes
+  - [x] Accept optional `order_id` in POST /workflows/{workflow_id}/runs request body (StartRunRequest)
+  - [x] Add `order_id` to RunSummaryResponse and RunDetailResponse models
+  - [x] Update SQL in get_all_runs() and get_run_detail() to SELECT order_id
+- [x] Execution changes
+  - [x] Load order_id from run record at start of execute_run()
+  - [x] Pass order_id to execute_step()
+  - [x] After successful task, call dispatch_action(conn, action, order_id) inside atomic block
+  - [x] Action failure rolls back entire atomic block, treated as step failure with retry support
+- [x] Tests
+  - [x] Unit tests for each action function (happy path + wrong status)
+  - [x] E2E test: 3-step workflow with order_id, order ends at "shipped"
+  - [x] Edge case: run without order_id (actions are no-ops)
+  - [x] Edge case: unknown action string (no-op, step still succeeds)
+  - [x] Edge case: action function failure (step fails, transaction rolls back)
+- [x] Example workflow JSON files in `examples/`
+- **Verify**: create order, run 3-step workflow with order_id, confirm order status is "shipped" at end — YES (manual curl test + 100 automated tests)
+
 ---
 
 ## Verification Checkpoints
@@ -166,6 +201,7 @@
 | README instructions work from scratch | 9 | NO |
 | Out-of-order depends_on produces correct step_index; cycles rejected | 10 | YES |
 | Upload .json file populates textarea, workflow submits successfully | 11 | PENDING USER VERIFICATION |
+| Order progresses pending->validated->charged->shipped during run with order_id | 12 | YES |
 
 ---
 
@@ -185,3 +221,8 @@ _Track any issues encountered or decisions made during implementation._
 - **Step row mapping**: `_step_to_response()` explicitly maps fields to `StepStateResponse` because `SELECT *` returns extra columns (`run_id`, `idempotency_key`, `created_at`) not in the model. Other models use `**dict(row)` where SQL aliases match exactly.
 - **`on_event("startup")`**: Used despite deprecation warning because the project is sync-only (no async/await). Works fine.
 - **Dependency-ordered execution (Phase 10)**: Topo sort at run creation time (Option 1). `step_index` reflects dependency order, execution loop unchanged. Validation relaxed to allow any-order `depends_on` references; cycle detection added instead.
+- **Action dispatch design (Phase 12)**: Actions execute inside the existing atomic commit block (step_result + step completion + order mutation). No separate transaction needed.
+- **Action failure handling (Phase 12)**: If dispatch_action raises, the entire atomic block (result + completion + action) is rolled back. The step is treated as failed with retry support — same retry logic as task execution failures.
+- **No fulfill_order action (Phase 12)**: `ship_order` transitions directly from "charged" to "shipped". 3 steps instead of 4 keeps the sample workflow simpler.
+- **Optional order_id (Phase 12)**: `order_id` on runs is nullable. Runs without an order_id still execute normally — action dispatch is silently skipped.
+- **send_notification behavior (Phase 12)**: Included in ACTION_REGISTRY but performs no status transition. Demonstrates that not all actions need to mutate order state.

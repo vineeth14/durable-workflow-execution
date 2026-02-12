@@ -29,6 +29,7 @@ from models import (
     OrderResponse,
     RunDetailResponse,
     RunSummaryResponse,
+    StartRunRequest,
     StepStateResponse,
     WorkflowDetailResponse,
     WorkflowStep,
@@ -140,6 +141,7 @@ def get_workflow_route(
 )
 def create_run_route(
     workflow_id: str,
+    body: StartRunRequest | None = None,
     conn: sqlite3.Connection = Depends(get_db),
 ):
     workflow_row = get_workflow(conn, workflow_id)
@@ -149,7 +151,8 @@ def create_run_route(
     definition = json.loads(workflow_row["definition"])
     steps = [WorkflowStep(**s) for s in definition["steps"]]
 
-    run_id = create_run(conn, workflow_id)
+    order_id = body.order_id if body else None
+    run_id = create_run(conn, workflow_id, order_id=order_id)
     step_rows = create_steps(conn, run_id, steps)
     start_run_thread(run_id)
 

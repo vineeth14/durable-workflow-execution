@@ -1,0 +1,38 @@
+{
+  "name": "simple-pipeline",
+  "steps": [
+    {
+      "id": "fetch-data",
+      "type": "task",
+      "config": {
+        "action": "fetch",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": []
+    },
+    {
+      "id": "transform",
+      "type": "task",
+      "config": {
+        "action": "transform",
+        "duration_seconds": 2,
+        "fail_probability": 0.1,
+        "max_retries": 3
+      },
+      "depends_on": ["fetch-data"]
+    },
+    {
+      "id": "load",
+      "type": "task",
+      "config": {
+        "action": "load",
+        "duration_seconds": 1.5,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["transform"]
+    }
+  ]
+}

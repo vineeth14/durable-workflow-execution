@@ -1,0 +1,49 @@
+{
+  "name": "diamond-workflow",
+  "steps": [
+    {
+      "id": "start",
+      "type": "task",
+      "config": {
+        "action": "init",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": []
+    },
+    {
+      "id": "branch-a",
+      "type": "task",
+      "config": {
+        "action": "process_a",
+        "duration_seconds": 2,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["start"]
+    },
+    {
+      "id": "branch-b",
+      "type": "task",
+      "config": {
+        "action": "process_b",
+        "duration_seconds": 1.5,
+        "fail_probability": 0.2,
+        "max_retries": 2
+      },
+      "depends_on": ["start"]
+    },
+    {
+      "id": "merge",
+      "type": "task",
+      "config": {
+        "action": "aggregate",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["branch-a", "branch-b"]
+    }
+  ]
+}

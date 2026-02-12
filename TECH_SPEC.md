@@ -49,6 +49,7 @@ Priorities: explainability and correctness over feature richness.
 | started_at | TEXT | Nullable, set when execution begins |
 | completed_at | TEXT | Nullable, set when execution finishes |
 | created_at | TEXT NOT NULL | ISO 8601 |
+| order_id | TEXT | Nullable FK -> orders.id. Associates run with an order for action dispatch. |
 
 ### `steps`
 
@@ -93,6 +94,7 @@ Priorities: explainability and correctness over feature richness.
 - **Workflow** (1) -> (many) **Runs**
 - **Run** (1) -> (many) **Steps**
 - **Step** (1) -> (0..many) **Step Results** (one per execution attempt via idempotency_key)
+- **Run** (many) -> (0..1) **Order** (optional association via `order_id`)
 
 UUID hierarchy: `workflow_id` -> `run_id` -> step `id` -> `idempotency_key`
 
@@ -152,7 +154,7 @@ On server restart: "running" runs are candidates for recovery.
 3. Check step_results for existing result with this idempotency_key
    - If found: mark step "completed", return success (skip work)
 4. Execute simulated task (sleep + random failure)
-5. On success: **single transaction** -> insert step_result + mark step "completed", commit
+5. On success: **single transaction** -> insert step_result + mark step "completed" + dispatch action (if applicable), commit
 6. On failure + retries remain: increment retry_count, set status to "pending", generate NEW idempotency_key, commit
 7. On failure + retries exhausted: mark step "failed" with error_message, commit
 
@@ -205,11 +207,39 @@ Before accepting HTTP requests:
 |-------|------|---------|-------------|
 | duration_seconds | float | 1.0 | Sleep duration |
 | fail_probability | float | 0.0 | Chance of random failure (0.0-1.0) |
-| action | string | - | Descriptive label, logged but doesn't affect behavior |
+| action | string | - | Key into ACTION_REGISTRY. If matched and run has an `order_id`, the registered function executes inside the atomic commit block. |
 
-### Business Logic Demo
+### Action Dispatch (Phase 12)
 
-Orders table supports steps like "validate_order" -> "charge_order" -> "ship_order", with status updates inside the same transaction as step completion.
+#### ACTION_REGISTRY
+
+| Action Key | Function | Order Status Transition | Description |
+|------------|----------|------------------------|-------------|
+| validate_order | validate_order(conn, order_id) | pending -> validated | Checks order exists, verifies amount > 0 |
+| charge_payment | charge_payment(conn, order_id) | validated -> charged | Simulates payment processing |
+| ship_order | ship_order(conn, order_id) | charged -> shipped | Marks order as shipped (final state) |
+| send_notification | send_notification(conn, order_id) | (no transition) | Logs notification, no status change |
+
+#### Order Status Flow
+
+```
+pending -> validated -> charged -> shipped
+```
+
+#### Dispatch Rules
+
+1. After task execution succeeds, check if the step's `action` exists in ACTION_REGISTRY
+2. If found AND the run has an `order_id`: call the registered function with `(conn, order_id)` inside the existing atomic transaction
+3. If action not found in registry: no-op (step still succeeds)
+4. If run has no `order_id`: no-op (step still succeeds)
+5. If action function raises an exception: the entire atomic commit (step_result + step completion + action) rolls back, and the step is treated as failed
+
+#### Durability Guarantees
+
+The action mutation happens **inside the same atomic transaction** as the step result insert and step completion update. This means:
+- Either all three succeed (result recorded + step completed + order mutated) or none do
+- On crash recovery, a step without a result record will re-execute, which will re-run the action
+- No window exists where a step is marked complete but the order mutation is lost
 
 ---
 
@@ -220,7 +250,7 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 | Method | Path | Description | Status |
 |--------|------|-------------|--------|
 | POST | `/workflows` | Create workflow definition | 201 |
-| POST | `/workflows/{workflow_id}/runs` | Start a run | 202 |
+| POST | `/workflows/{workflow_id}/runs` | Start a run (optional order_id in body) | 202 |
 | GET | `/workflows` | List all workflows | 200 |
 | GET | `/workflows/{workflow_id}` | Get workflow with full JSON | 200 |
 | GET | `/runs` | List all runs | 200 |
@@ -248,6 +278,16 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
   ]
 }
 ```
+
+### POST /workflows/{workflow_id}/runs - Request (Optional)
+
+```json
+{
+  "order_id": "order-uuid"
+}
+```
+
+> If `order_id` is provided, the run is associated with that order. Action functions in the ACTION_REGISTRY will receive the order and can mutate its state inside the atomic commit block. If omitted, the run executes normally without action dispatch.
 
 ### Validation Rules
 
@@ -289,6 +329,7 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
     "id": "run-uuid",
     "workflow_id": "wf-uuid",
     "workflow_name": "order-processing",
+    "order_id": "order-uuid-or-null",
     "status": "running",
     "started_at": "2024-01-01T00:00:00",
     "completed_at": null
@@ -305,6 +346,7 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
   "id": "run-uuid",
   "workflow_id": "wf-uuid",
   "workflow_name": "order-processing",
+  "order_id": "order-uuid-or-null",
   "status": "running",
   "started_at": "2024-01-01T00:00:00",
   "completed_at": null,
@@ -418,6 +460,34 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
 - [ ] README with setup instructions
 - [ ] DECISIONS.md with tech choices and trade-offs
 
+### Phase 10: Dependency-Ordered Execution
+- [x] Topological sort function (Kahn's algorithm)
+- [x] Update create_steps to sort before assigning step_index
+- [x] Relax validation to allow any-order depends_on references
+- [x] Cycle detection at validation and run creation
+- [x] Tests for topo sort, diamond deps, out-of-order input, cycles
+
+### Phase 11: File Upload
+- [x] Add file input to dashboard
+- [x] FileReader API to populate textarea
+- [x] Auto-format loaded JSON
+- [x] Improve validation error display
+
+### Phase 12: Action Dispatch & Business Logic
+- [ ] Create `actions.py` module with ACTION_REGISTRY and action functions
+- [ ] Add `order_id` column to runs table schema in `database.py`
+- [ ] Update `init_db()` to include order_id column
+- [ ] Update `create_run()` to accept optional order_id parameter
+- [ ] Update API: accept optional order_id in POST /workflows/{id}/runs request body
+- [ ] Update response models to include order_id field
+- [ ] Update SQL queries (get_all_runs, get_run_detail) to return order_id
+- [ ] Update `execute_step()` to dispatch action after task success
+- [ ] Load order_id from run record in execution loop
+- [ ] Unit tests for each action function
+- [ ] E2E test: order progresses pending->validated->charged->shipped
+- [ ] Edge case tests: no order_id, unknown action, action failure
+- **Verify**: create order, run 3-step workflow with order_id, confirm order status is "shipped" at end
+
 ---
 
 ## Testing Scenarios
@@ -463,32 +533,21 @@ Orders table supports steps like "validate_order" -> "charge_order" -> "ship_ord
       "depends_on": ["validate"]
     },
     {
-      "id": "fulfill",
+      "id": "ship",
       "type": "task",
       "config": {
-        "action": "fulfill_order",
+        "action": "ship_order",
         "duration_seconds": 2,
         "fail_probability": 0.0,
         "max_retries": 0
       },
       "depends_on": ["charge"]
-    },
-    {
-      "id": "notify",
-      "type": "task",
-      "config": {
-        "action": "send_notification",
-        "duration_seconds": 1,
-        "fail_probability": 0.0,
-        "max_retries": 0
-      },
-      "depends_on": ["fulfill"]
     }
   ]
 }
 ```
 
-~8 seconds total if no retries needed. Charge step (30% failure, 2 retries) will usually succeed eventually.
+~7 seconds total if no retries needed. Charge step (30% failure, 2 retries) will usually succeed eventually.
 
 ---
 

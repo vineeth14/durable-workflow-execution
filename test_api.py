@@ -569,7 +569,7 @@ class TestResponseShapes:
 
         body = client.get(f"/runs/{run_id}").json()
         expected_keys = {
-            "id", "workflow_id", "workflow_name", "status",
+            "id", "workflow_id", "workflow_name", "order_id", "status",
             "started_at", "completed_at", "steps",
         }
         assert set(body.keys()) == expected_keys
@@ -585,3 +585,80 @@ class TestResponseShapes:
         assert "definition" in detail
         assert summary["id"] == detail["id"]
         assert summary["name"] == detail["name"]
+
+
+# ==================================================================
+# Phase 12: Action dispatch via API
+# ==================================================================
+class TestActionDispatchAPI:
+    def test_create_run_with_order_id(self, client):
+        """POST /workflows/{id}/runs with order_id associates the order."""
+        # Create order
+        order_resp = client.post("/orders", json={"amount": 49.99})
+        order_id = order_resp.json()["id"]
+
+        # Create workflow
+        wf_id = client.post("/workflows", json=SAMPLE_WORKFLOW).json()["id"]
+
+        # Start run with order_id
+        run_resp = client.post(f"/workflows/{wf_id}/runs", json={"order_id": order_id})
+        assert run_resp.status_code == 202
+        body = run_resp.json()
+        assert body["order_id"] == order_id
+
+    def test_create_run_without_body(self, client):
+        """POST /workflows/{id}/runs with no body still works (order_id=null)."""
+        wf_id = client.post("/workflows", json=SAMPLE_WORKFLOW).json()["id"]
+        run_resp = client.post(f"/workflows/{wf_id}/runs")
+        assert run_resp.status_code == 202
+        assert run_resp.json()["order_id"] is None
+
+    def test_runs_list_includes_order_id(self, client):
+        """GET /runs includes order_id field."""
+        order_id = client.post("/orders", json={"amount": 10.0}).json()["id"]
+        wf_id = client.post("/workflows", json=SAMPLE_WORKFLOW).json()["id"]
+        client.post(f"/workflows/{wf_id}/runs", json={"order_id": order_id})
+
+        runs = client.get("/runs").json()
+        assert len(runs) >= 1
+        assert "order_id" in runs[0]
+        assert runs[0]["order_id"] == order_id
+
+    def test_e2e_order_processing_via_api(self, client):
+        """Full E2E via API: order progresses pending -> validated -> charged -> shipped."""
+        # Create order
+        order_id = client.post("/orders", json={"amount": 99.99}).json()["id"]
+        assert client.get(f"/orders/{order_id}").json()["status"] == "pending"
+
+        # Create workflow + run with order
+        wf_id = client.post("/workflows", json=SAMPLE_WORKFLOW).json()["id"]
+        run_id = client.post(
+            f"/workflows/{wf_id}/runs", json={"order_id": order_id}
+        ).json()["id"]
+
+        # Wait for run to complete
+        for _ in range(100):
+            body = client.get(f"/runs/{run_id}").json()
+            if body["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.1)
+
+        assert body["status"] == "completed"
+        assert all(s["status"] == "completed" for s in body["steps"])
+
+        # Verify order progressed to shipped
+        order = client.get(f"/orders/{order_id}").json()
+        assert order["status"] == "shipped"
+
+    def test_run_without_order_actions_noop(self, client):
+        """Run without order_id: action dispatch is silently skipped."""
+        wf_id = client.post("/workflows", json=SAMPLE_WORKFLOW).json()["id"]
+        run_id = client.post(f"/workflows/{wf_id}/runs").json()["id"]
+
+        for _ in range(100):
+            body = client.get(f"/runs/{run_id}").json()
+            if body["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.1)
+
+        assert body["status"] == "completed"

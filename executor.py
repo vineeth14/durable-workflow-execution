@@ -6,6 +6,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 
+from actions import dispatch_action
 from models import WorkflowStepConfig
 from tasks import TaskExecutionError, execute_task
 
@@ -54,14 +55,14 @@ def get_workflow(conn: sqlite3.Connection, workflow_id: str) -> sqlite3.Row | No
 # ---------------------------------------------------------------------------
 
 
-def create_run(conn: sqlite3.Connection, workflow_id: str) -> str:
+def create_run(conn: sqlite3.Connection, workflow_id: str, order_id: str | None = None) -> str:
     """Insert a new run in 'pending' status. Commits. Returns the run UUID."""
     run_id = str(uuid.uuid4())
     now = _now()
     conn.execute(
-        "INSERT INTO runs (id, workflow_id, status, started_at, completed_at, created_at) "
-        "VALUES (?, ?, 'pending', NULL, NULL, ?)",
-        (run_id, workflow_id, now),
+        "INSERT INTO runs (id, workflow_id, status, started_at, completed_at, created_at, order_id) "
+        "VALUES (?, ?, 'pending', NULL, NULL, ?, ?)",
+        (run_id, workflow_id, now, order_id),
     )
     conn.commit()
     return run_id
@@ -70,7 +71,7 @@ def create_run(conn: sqlite3.Connection, workflow_id: str) -> str:
 def get_all_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return all runs with workflow_name (via JOIN). Newest first."""
     return conn.execute(
-        "SELECT r.id, r.workflow_id, w.name AS workflow_name, r.status, "
+        "SELECT r.id, r.workflow_id, w.name AS workflow_name, r.order_id, r.status, "
         "r.started_at, r.completed_at "
         "FROM runs r JOIN workflows w ON r.workflow_id = w.id "
         "ORDER BY r.created_at DESC"
@@ -80,7 +81,7 @@ def get_all_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def get_run_detail(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
     """Return a single run with workflow_name, or None. Steps fetched separately."""
     return conn.execute(
-        "SELECT r.id, r.workflow_id, w.name AS workflow_name, r.status, "
+        "SELECT r.id, r.workflow_id, w.name AS workflow_name, r.order_id, r.status, "
         "r.started_at, r.completed_at "
         "FROM runs r JOIN workflows w ON r.workflow_id = w.id "
         "WHERE r.id = ?",
@@ -290,7 +291,10 @@ def get_order(conn: sqlite3.Connection, order_id: str) -> sqlite3.Row | None:
 
 
 def execute_step(
-    conn: sqlite3.Connection, step_row: sqlite3.Row, step_config: WorkflowStepConfig
+    conn: sqlite3.Connection,
+    step_row: sqlite3.Row,
+    step_config: WorkflowStepConfig,
+    order_id: str | None = None,
 ) -> str:
     """Execute a single step with idempotency and retry support.
 
@@ -343,10 +347,33 @@ def execute_step(
             logger.warning("Step %s: permanently failed after %d attempts", step_id, retry_count + 1)
             return "failed"
 
-    # 4. Success: atomic commit — insert result + mark completed
-    insert_step_result(conn, idem_key, step_id, result)
-    update_step_status(conn, step_id, "completed", completed_at=_now())
-    conn.commit()
+    # 4. Success: atomic commit — insert result + mark completed + dispatch action
+    try:
+        insert_step_result(conn, idem_key, step_id, result)
+        dispatch_action(conn, step_config.action, order_id)
+        update_step_status(conn, step_id, "completed", completed_at=_now())
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        # Action failure treated as step failure
+        if retry_count < max_retries:
+            new_idem_key = str(uuid.uuid4())
+            update_step_status(
+                conn, step_id, "pending",
+                retry_count=retry_count + 1, idempotency_key=new_idem_key,
+            )
+            conn.commit()
+            logger.info("Step %s: action dispatch failed, will retry", step_id)
+            return "retry"
+        else:
+            update_step_status(
+                conn, step_id, "failed",
+                completed_at=_now(), error_message="Action dispatch failed",
+            )
+            conn.commit()
+            logger.warning("Step %s: action dispatch permanently failed", step_id)
+            return "failed"
+
     logger.info("Step %s: completed successfully", step_id)
     return "completed"
 
@@ -373,8 +400,9 @@ def execute_run(run_id: str) -> None:
 
         definition = json.loads(workflow["definition"])
         step_configs_by_id = {s["id"]: s["config"] for s in definition["steps"]}
-        logger.info("Run %s: starting execution (workflow='%s', steps=%d)",
-                     run_id, run["workflow_name"], len(step_configs_by_id))
+        order_id = run["order_id"]
+        logger.info("Run %s: starting execution (workflow='%s', steps=%d, order_id=%s)",
+                     run_id, run["workflow_name"], len(step_configs_by_id), order_id)
 
         # Mark run as running (skip if already running — crash recovery case)
         if run["status"] != "running":
@@ -402,7 +430,7 @@ def execute_run(run_id: str) -> None:
                     current_step = get_steps_for_run(conn, run_id)
                     current = next(s for s in current_step if s["id"] == step_row["id"])
 
-                    outcome = execute_step(conn, current, step_config)
+                    outcome = execute_step(conn, current, step_config, order_id=order_id)
 
                     if outcome == "completed":
                         break

@@ -1161,3 +1161,264 @@ class TestTopologicalSort:
         assert result_ids.index("A") < result_ids.index("C")
         assert result_ids.index("B") < result_ids.index("D")
         assert result_ids.index("C") < result_ids.index("D")
+
+
+# ==================================================================
+# Test 13: Action dispatch — Phase 12
+# ==================================================================
+class TestActionDispatch:
+    """Unit tests for actions.py functions and dispatch integration."""
+
+    def test_validate_order_happy(self, conn):
+        """validate_order transitions pending -> validated."""
+        from actions import validate_order
+
+        order_id = create_order(conn, 49.99)
+        order = get_order(conn, order_id)
+        assert order["status"] == "pending"
+
+        validate_order(conn, order_id)
+        conn.commit()
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "validated"
+
+    def test_validate_order_wrong_status(self, conn):
+        """validate_order raises on non-pending order."""
+        from actions import validate_order
+
+        order_id = create_order(conn, 49.99)
+        conn.execute("UPDATE orders SET status = 'validated' WHERE id = ?", (order_id,))
+        conn.commit()
+
+        with pytest.raises(ValueError, match="expected 'pending'"):
+            validate_order(conn, order_id)
+
+    def test_charge_payment_happy(self, conn):
+        """charge_payment transitions validated -> charged."""
+        from actions import charge_payment
+
+        order_id = create_order(conn, 49.99)
+        conn.execute("UPDATE orders SET status = 'validated' WHERE id = ?", (order_id,))
+        conn.commit()
+
+        charge_payment(conn, order_id)
+        conn.commit()
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "charged"
+
+    def test_charge_payment_wrong_status(self, conn):
+        """charge_payment raises on non-validated order."""
+        from actions import charge_payment
+
+        order_id = create_order(conn, 49.99)
+
+        with pytest.raises(ValueError, match="expected 'validated'"):
+            charge_payment(conn, order_id)
+
+    def test_ship_order_happy(self, conn):
+        """ship_order transitions charged -> shipped."""
+        from actions import ship_order
+
+        order_id = create_order(conn, 49.99)
+        conn.execute("UPDATE orders SET status = 'charged' WHERE id = ?", (order_id,))
+        conn.commit()
+
+        ship_order(conn, order_id)
+        conn.commit()
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "shipped"
+
+    def test_ship_order_wrong_status(self, conn):
+        """ship_order raises on non-charged order."""
+        from actions import ship_order
+
+        order_id = create_order(conn, 49.99)
+
+        with pytest.raises(ValueError, match="expected 'charged'"):
+            ship_order(conn, order_id)
+
+    def test_send_notification_no_status_change(self, conn):
+        """send_notification does not change order status."""
+        from actions import send_notification
+
+        order_id = create_order(conn, 49.99)
+        send_notification(conn, order_id)
+        conn.commit()
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "pending"
+
+    def test_dispatch_action_no_order_id(self, conn):
+        """dispatch_action is a no-op when order_id is None."""
+        from actions import dispatch_action
+
+        # Should not raise
+        dispatch_action(conn, "validate_order", None)
+
+    def test_dispatch_action_unknown_action(self, conn):
+        """dispatch_action is a no-op for unknown actions."""
+        from actions import dispatch_action
+
+        order_id = create_order(conn, 49.99)
+        dispatch_action(conn, "nonexistent_action", order_id)
+        conn.commit()
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "pending"
+
+    def test_validate_order_not_found(self, conn):
+        """validate_order raises on nonexistent order."""
+        from actions import validate_order
+
+        with pytest.raises(ValueError, match="not found"):
+            validate_order(conn, "nonexistent-order-id")
+
+    def test_e2e_order_processing(self, conn):
+        """Full E2E: 3-step workflow with order_id, order ends at 'shipped'."""
+        order_id = create_order(conn, 99.99)
+
+        wf = CreateWorkflowRequest(
+            name="order-processing",
+            steps=[
+                WorkflowStep(
+                    id="validate", type="task",
+                    config=WorkflowStepConfig(
+                        action="validate_order", duration_seconds=0.01,
+                    ),
+                    depends_on=[],
+                ),
+                WorkflowStep(
+                    id="charge", type="task",
+                    config=WorkflowStepConfig(
+                        action="charge_payment", duration_seconds=0.01,
+                    ),
+                    depends_on=["validate"],
+                ),
+                WorkflowStep(
+                    id="ship", type="task",
+                    config=WorkflowStepConfig(
+                        action="ship_order", duration_seconds=0.01,
+                    ),
+                    depends_on=["charge"],
+                ),
+            ],
+        )
+
+        definition_json = json.dumps(wf.model_dump())
+        wf_id = create_workflow(conn, wf.name, definition_json)
+        run_id = create_run(conn, wf_id, order_id=order_id)
+        create_steps(conn, run_id, wf.steps)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        order = get_order(conn, order_id)
+        assert order["status"] == "shipped"
+
+    def test_e2e_run_without_order_id(self, conn):
+        """Run without order_id: actions are no-ops, run still completes."""
+        wf = CreateWorkflowRequest(
+            name="no-order",
+            steps=[
+                WorkflowStep(
+                    id="validate", type="task",
+                    config=WorkflowStepConfig(
+                        action="validate_order", duration_seconds=0.01,
+                    ),
+                ),
+            ],
+        )
+        definition_json = json.dumps(wf.model_dump())
+        wf_id = create_workflow(conn, wf.name, definition_json)
+        run_id = create_run(conn, wf_id)
+        create_steps(conn, run_id, wf.steps)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+    def test_e2e_unknown_action_no_op(self, conn):
+        """Step with unknown action string: step still succeeds."""
+        order_id = create_order(conn, 10.0)
+
+        wf = CreateWorkflowRequest(
+            name="unknown-action",
+            steps=[
+                WorkflowStep(
+                    id="mystery", type="task",
+                    config=WorkflowStepConfig(
+                        action="nonexistent_action", duration_seconds=0.01,
+                    ),
+                ),
+            ],
+        )
+        definition_json = json.dumps(wf.model_dump())
+        wf_id = create_workflow(conn, wf.name, definition_json)
+        run_id = create_run(conn, wf_id, order_id=order_id)
+        create_steps(conn, run_id, wf.steps)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "completed"
+
+        # Order status unchanged (action was no-op)
+        order = get_order(conn, order_id)
+        assert order["status"] == "pending"
+
+    def test_action_failure_fails_step(self, conn):
+        """If an action function raises, the step fails and transaction rolls back."""
+        order_id = create_order(conn, 50.0)
+        # Order is "pending", but we're calling charge_payment which expects "validated"
+        # This will cause the action to fail
+
+        wf = CreateWorkflowRequest(
+            name="action-fail",
+            steps=[
+                WorkflowStep(
+                    id="bad-charge", type="task",
+                    config=WorkflowStepConfig(
+                        action="charge_payment", duration_seconds=0.01,
+                    ),
+                ),
+            ],
+        )
+        definition_json = json.dumps(wf.model_dump())
+        wf_id = create_workflow(conn, wf.name, definition_json)
+        run_id = create_run(conn, wf_id, order_id=order_id)
+        create_steps(conn, run_id, wf.steps)
+
+        execute_run(run_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["status"] == "failed"
+
+        step = get_steps_for_run(conn, run_id)[0]
+        assert step["status"] == "failed"
+
+        # Order unchanged — transaction was rolled back
+        order = get_order(conn, order_id)
+        assert order["status"] == "pending"
+
+    def test_create_run_with_order_id(self, conn):
+        """create_run stores order_id when provided."""
+        order_id = create_order(conn, 25.0)
+        wf_id = create_workflow(conn, "test-wf", json.dumps({"name": "test", "steps": []}))
+        run_id = create_run(conn, wf_id, order_id=order_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["order_id"] == order_id
+
+    def test_create_run_without_order_id(self, conn):
+        """create_run defaults order_id to None."""
+        wf_id = create_workflow(conn, "test-wf", json.dumps({"name": "test", "steps": []}))
+        run_id = create_run(conn, wf_id)
+
+        run = get_run_detail(conn, run_id)
+        assert run["order_id"] is None

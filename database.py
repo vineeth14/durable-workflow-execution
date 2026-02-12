@@ -27,7 +27,8 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 started_at TEXT,
                 completed_at TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                order_id TEXT REFERENCES orders(id)
             );
 
             CREATE TABLE IF NOT EXISTS steps (

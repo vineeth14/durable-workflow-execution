@@ -83,10 +83,15 @@ class WorkflowDetailResponse(BaseModel):
 # --- Run response models ---
 
 
+class StartRunRequest(BaseModel):
+    order_id: str | None = None
+
+
 class RunSummaryResponse(BaseModel):
     id: str
     workflow_id: str
     workflow_name: str
+    order_id: str | None
     status: str
     started_at: str | None
     completed_at: str | None
@@ -108,6 +113,7 @@ class RunDetailResponse(BaseModel):
     id: str
     workflow_id: str
     workflow_name: str
+    order_id: str | None
     status: str
     started_at: str | None
     completed_at: str | None
