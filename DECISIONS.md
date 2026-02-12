@@ -1,50 +1,47 @@
-# Decisions
+<!-- <!-- # Decisions -->
 
 ## What Libraries/Tools Did I Evaluate?
 
-- **Temporal**: Production-grade but heavy. Requires a Temporal server (Docker), SDK setup, and understanding its programming model (activities, workflows, task queues). Overkill for a 2-day prototype — most of the time would be spent on setup, not demonstrating understanding.
-- **Inngest**: Serverless-oriented, event-driven. Would abstract away the durability mechanics that the assignment asks me to demonstrate.
-- **DBOS**: Interesting transactional approach but relatively new. Would tie the implementation to their specific patterns.
-- **BullMQ**: Redis-backed job queue. Good for task queues but doesn't naturally model multi-step workflows with dependency ordering.
+**Temporal**: Provides sub-step checkpointing, saga-pattern rollbacks, multi-node worker pools, and battle-tested crash recovery. The downside? Serious operational overhead. I'd need to run a Temporal server (usually Docker), learn their SDK's programming model (activities vs workflows vs task queues), and work through a pretty steep learning curve. For a 2-day prototype, I'd burn most of my time on setup. Don't get me wrong—for production systems with long-running steps and gnarly failures, Temporal is the right call.
+
+**Inngest**: Serverless and event-driven with a really clean developer experience. Handles durable execution, retries, and step-level state automatically. The problem? It abstracts away the exact mechanics this assignment wants me to demonstrate—idempotency, atomic commits, crash recovery.
+
+**BullMQ**: Solid Redis-backed job queue, great for task distribution and retry logic. But BullMQ models individual jobs, not multi-step workflows with dependency graphs. I could layer workflow orchestration on top, but then I'm basically writing the same coordination logic I wrote anyway—plus now I'm managing Redis. SQLite gave me zero-dependency persistence without all the extra moving parts.
 
 ## Why Did I Choose What I Chose?
 
-I chose **SQLite + custom execution loop** because:
+I went with **SQLite + custom execution loop** because:
 
-1. It makes the durability guarantees explicit and inspectable (you can literally watch the DB via the live viewer)
-2. Zero infrastructure — `uv sync && uv run python main.py` and it works
-3. The code directly demonstrates understanding of the concepts: idempotency, atomic commits, crash recovery, state machines
-4. SQLite WAL mode handles concurrent reads from the API while background threads write
-
-Other choices:
-
-- **FastAPI (sync)**: Lightweight, great for prototyping. Sync-only (no async/await) keeps the code simple and avoids threading pitfalls with SQLite.
-- **Vanilla JS frontend**: No build step, no npm, no React. Three HTML files with inline JS. The assignment says "functional and clear is sufficient" — a build toolchain would add setup friction for no benefit.
-- **Polling over WebSockets**: The frontend polls every 1.5s. For a demo with <10 concurrent users, this is simpler and sufficient. WebSockets/SSE would be better at scale.
-- **Daemon threads**: Background execution uses Python daemon threads. They're simple but die with the process — which is actually what we want, since the recovery system handles restarts.
-- **Immediate retries**: Failed steps retry immediately with no backoff. Fine for simulated tasks, but real external APIs would need exponential backoff.
-- **Sequential execution**: Steps run one at a time even when dependencies would allow parallelism. This keeps the execution model simple and the durability guarantees straightforward.
+1. **It makes durability guarantees explicit and inspectable** - you can literally watch the DB state change via the live viewer
+2. **Zero infrastructure** - just `uv sync && uv run python main.py` and you're running
+3. **The code directly shows ideas I've applied** - idempotency, atomic commits, crash recovery, state machines
 
 ## What Would I Do Differently With More Time?
 
-- **Migrate to Postgres** — unlock concurrent writes, distributed deployment with multiple worker processes, and advisory locks for run ownership. The SQL is nearly identical; the migration is mostly connection and transaction management.
-- **Parallel step execution** — the topological sort already identifies independent steps. A thread pool would dispatch all steps whose dependencies are satisfied after each completion. Atomic per-step writes mean crash recovery semantics don't change.
-- **Separate worker processes** — decouple execution from the API so they scale independently and workflows keep running if the API restarts.
-- **WebSocket/SSE** — SSE would be the simpler upgrade: push step status changes as they occur, browser reconnects automatically. I went with polling because it eliminated connection lifecycle bugs and was sufficient for the demo.
-- **Configurable retry policies with exponential backoff** — initial delay, backoff multiplier, max delay, and jitter to avoid thundering herds against struggling external services.
-- **External idempotency key propagation** — pass the step's idempotency key to external services (most payment APIs support this natively) to prevent duplicate calls on recovery.
-- **Evaluate Temporal or Inngest** — for a production system needing sub-step checkpointing, saga-pattern rollbacks, and multi-node workers, you're essentially rebuilding what Temporal provides. Inngest would be worth evaluating as a lighter-weight alternative.
+**Migrate to Postgres** - This unlocks concurrent writes, distributed deployment with multiple workers, and advisory locks for run ownership. The SQL stays pretty much the same; it's mostly about connection and transaction management.
+
+**Parallel step execution** - The topological sort already knows which steps are independent. A thread pool could fire off all steps whose dependencies are met. The atomic per-step writes mean crash recovery semantics don't change at all.
+
+**Separate worker processes** - Decouple execution from the API so they can scale independently and workflows keep chugging along even if the API restarts.
+
+**WebSocket/SSE** - SSE would actually be simpler: push step status changes as they happen, browser reconnects automatically. I went with polling because it keeps the connection lifecycle simple and was enough for the project scope.
+
+**Configurable retry policies with exponential backoff** - Initial delay, backoff multiplier, max delay, and jitter so we're not hammering struggling external services all at once.
+
+**External idempotency key propagation** - Pass the step's idempotency key to external services (most payment APIs already support this) to prevent duplicate calls on recovery.
+
+**Use Temporal** - To allow for sub-step checkpointing, saga-pattern rollbacks, and multi-node workers. At that point it's smarter to just adopt it than to maintain a custom engine with those features.
 
 ## What Are the Limitations?
 
-**Single-node, in-process execution.** SQLite is file-based and doesn't support network access, so the system can't distribute work across multiple machines. All workflow execution happens inside the API process — if that process is down, no workflows run. Scaling beyond one server would require migrating to Postgres and introducing a separate worker process that polls for pending runs.
+**Single-node, in-process execution** - SQLite is file-based with no network access, so I can't distribute work across multiple machines. All workflow execution happens inside the API process—if that process goes down, no workflows run. Scaling beyond one server means migrating to Postgres and running separate worker processes that poll for pending runs.
 
-**No parallel step execution.** Steps run sequentially in topological order even when they have no dependency relationship. The ecommerce pipeline takes roughly 25 seconds sequentially but could complete in approximately 15 seconds with parallelism. This was a deliberate simplicity trade-off — sequential execution makes crash recovery trivial (iterate steps in order, skip completed ones) and eliminates concurrent write contention in SQLite.
+**No parallel step execution** - Steps run sequentially in topological order even when they're totally independent. The ecommerce pipeline takes ~25 seconds sequentially but could finish in ~15 with parallelism. This was a deliberate trade-off—sequential execution makes crash recovery dead simple (just iterate steps in order, skip the completed ones) and avoids any concurrent write headaches in SQLite.
 
-**No sub-step durability.** Checkpointing happens at the step boundary. If a step takes 5 minutes and crashes at minute 4, the entire step re-executes from scratch. For the simulated tasks in this system (1-5 seconds each), this is a non-issue. For production workloads with long-running steps, this is where a framework like Temporal adds real value — it checkpoints after every side effect within a step.
+**No sub-step durability** - Checkpointing happens at step boundaries. If a step takes 5 minutes and crashes at minute 4, the whole thing re-runs from scratch. For the simulated tasks here (1-5 seconds each), totally fine. For production workloads with long-running steps, this is where Temporal would be useful it checkpoints after every single side effect within a step.
 
-**External side effects may duplicate on recovery.** The atomic transaction model guarantees that internal database writes and step completion are committed together. But if a step makes an external API call (HTTP request, email send) and crashes after the call succeeds but before the transaction commits, recovery will re-execute the step and repeat the external call. Real payment or notification integrations would need to pass idempotency keys to the external service.
+**External side effects might duplicate on recovery** - The atomic transaction model guarantees that internal database writes and step completion commit together. But if a step makes an external API call (HTTP request, email) and crashes after the call succeeds but before the transaction commits, recovery will re-execute the step and repeat that external call. Real payment or notification integrations would need to pass idempotency keys to the external service.
 
-**No authentication or multi-tenancy.** Any client can create workflows, start runs, view all data, and reset the database. A production system needs user authentication, per-user workflow isolation, and role-based access controls.
+**No authentication or multi-tenancy** - Any client can create workflows, start runs, view all data, and nuke the database. Production obviously needs user authentication, per-user workflow isolation, and role-based access controls.
 
-**Polling-based UI updates.** Each open browser tab makes an API request every 1.5 seconds. This works fine for a demo but doesn't scale — 100 users watching runs means 67 requests per second just for status polling. WebSockets or SSE would push updates only when state actually changes.
+**Polling-based UI updates** - Each open browser tab hits the API every 1.5 seconds. Works fine for a demo, but doesn't scale—100 users watching runs means 67 requests/second just for status polling. WebSockets or SSE would only push updates when state actually changes.

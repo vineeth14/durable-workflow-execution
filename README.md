@@ -19,42 +19,40 @@ Open http://localhost:8000 in your browser.
 ### Running Tests
 
 ```bash
-uv run pytest
+uv run pytest     # 100 tests — executor, API, actions, topo sort
 ```
-
-100 tests covering the execution engine, API routes, action dispatch, crash recovery, and edge cases.
 
 ## Workflow JSON Structure
 
 ```json
 {
-  "name": "order-processing",
-  "steps": [
-    {
-      "id": "validate",
-      "type": "task",
-      "config": {
-        "action": "validate_order",
-        "duration_seconds": 2,
-        "fail_probability": 0.0,
-        "max_retries": 0
-      },
-      "depends_on": []
-    }
-  ]
+	"name": "order-processing",
+	"steps": [
+		{
+			"id": "validate",
+			"type": "task",
+			"config": {
+				"action": "validate_order",
+				"duration_seconds": 2,
+				"fail_probability": 0.0,
+				"max_retries": 0
+			},
+			"depends_on": []
+		}
+	]
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `name` | Human-readable workflow name |
-| `steps[].id` | Unique step identifier (referenced by `depends_on`) |
-| `steps[].type` | Step type (free-form string, e.g. `"task"`) |
-| `steps[].config.action` | Action to dispatch on success (e.g. `validate_order`, `charge_payment`, `ship_order`). Optional — steps without actions just run the simulated task. |
-| `steps[].config.duration_seconds` | How long the simulated task takes (default: 1.0) |
-| `steps[].config.fail_probability` | Chance of random failure, 0.0-1.0 (default: 0.0) |
-| `steps[].config.max_retries` | How many times to retry on failure (default: 0) |
-| `steps[].depends_on` | Array of step IDs that must complete before this step runs |
+| Field                             | Description                                                                                                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                            | Human-readable workflow name                                                                                                                         |
+| `steps[].id`                      | Unique step identifier (referenced by `depends_on`)                                                                                                  |
+| `steps[].type`                    | Step type (free-form string, e.g. `"task"`)                                                                                                          |
+| `steps[].config.action`           | Action to dispatch on success (e.g. `validate_order`, `charge_payment`, `ship_order`). Optional — steps without actions just run the simulated task. |
+| `steps[].config.duration_seconds` | How long the simulated task takes (default: 1.0)                                                                                                     |
+| `steps[].config.fail_probability` | Chance of random failure, 0.0-1.0 (default: 0.0)                                                                                                     |
+| `steps[].config.max_retries`      | How many times to retry on failure (default: 0)                                                                                                      |
+| `steps[].depends_on`              | Array of step IDs that must complete before this step runs                                                                                           |
 
 ## How to Use
 
@@ -72,6 +70,12 @@ uv run pytest
 3. While a step is running, kill the server (Ctrl+C)
 4. Restart with `uv run python main.py`
 5. Refresh the run detail page — the workflow resumes from where it left off, skipping completed steps
+
+## How It Works
+
+The system has three components: a FastAPI backend, a SQLite database, and a vanilla JS frontend. When a user submits an order, the backend stores the definition, creates a run record with step records (ordered via topological sort of depends_on), and spawns a daemon thread to execute steps sequentially. Each step completion is written atomically — the step result, step status update, and any business logic (like order status transitions) all commit in a single database transaction. If the server crashes at any point, the startup recovery routine queries for runs still marked "running," spawns threads to resume them, and the execution loop skips already-completed steps using idempotency key checks. The frontend polls the API every 1.5 seconds to show real-time step progress.
+
+The core durability guarantee comes from three mechanisms working together: atomic commits ensure partial state never persists, idempotency keys prevent duplicate work on recovery, and the startup recovery routine ensures no run is forgotten.
 
 ## Architecture
 
@@ -98,16 +102,16 @@ Browser (vanilla JS)          FastAPI (sync Python)          SQLite
 
 ### Key Files
 
-| File | Purpose |
-|------|---------|
-| `main.py` | FastAPI app, 12 API routes, startup recovery |
+| File          | Purpose                                                        |
+| ------------- | -------------------------------------------------------------- |
+| `main.py`     | FastAPI app, 12 API routes, startup recovery                   |
 | `executor.py` | CRUD helpers, execution loop, crash recovery, topological sort |
-| `actions.py` | Action registry and order mutation functions |
-| `database.py` | SQLite connection handling and schema creation |
-| `models.py` | Pydantic request/response models |
-| `tasks.py` | Simulated task executor (sleep + random failure) |
-| `static/` | Frontend: dashboard, run detail, DB viewer, CSS |
-| `examples/` | Sample workflow JSON files |
+| `actions.py`  | Action registry and order mutation functions                   |
+| `database.py` | SQLite connection handling and schema creation                 |
+| `models.py`   | Pydantic request/response models                               |
+| `tasks.py`    | Simulated task executor (sleep + random failure)               |
+| `static/`     | Frontend: dashboard, run detail, DB viewer, CSS                |
+| `examples/`   | Sample workflow JSON files                                     |
 
 ### Database Schema (5 tables)
 
@@ -119,8 +123,4 @@ Browser (vanilla JS)          FastAPI (sync Python)          SQLite
 
 ## Decisions, Trade-offs, and Limitations
 
-See [DECISIONS.md](DECISIONS.md) for:
-- What libraries/tools I evaluated (Temporal, Inngest, DBOS, BullMQ)
-- Why I chose SQLite + custom execution loop
-- What I'd do differently with more time
-- Limitations of the implementation
+See [DECISIONS.md](DECISIONS.md)

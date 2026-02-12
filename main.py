@@ -152,6 +152,16 @@ def create_run_route(
     steps = [WorkflowStep(**s) for s in definition["steps"]]
 
     order_id = body.order_id if body else None
+    if order_id is not None:
+        active = conn.execute(
+            "SELECT id FROM runs WHERE order_id = ? AND status IN ('pending', 'running')",
+            (order_id,),
+        ).fetchone()
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Order {order_id} already has an active run: {active['id']}",
+            )
     run_id = create_run(conn, workflow_id, order_id=order_id)
     step_rows = create_steps(conn, run_id, steps)
     start_run_thread(run_id)
