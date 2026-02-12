@@ -257,6 +257,10 @@ The action mutation happens **inside the same atomic transaction** as the step r
 | GET | `/runs/{run_id}` | Get run detail with step states | 200 |
 | POST | `/orders` | Create test order (demo) | 201 |
 | GET | `/orders/{order_id}` | Get order state (demo) | 200 |
+| GET | `/examples` | List example workflow JSON filenames | 200 |
+| GET | `/examples/{filename}` | Get example workflow JSON contents | 200 |
+| GET | `/db/snapshot` | Get row counts + recent rows from all tables | 200 |
+| POST | `/db/reset` | Delete all rows from all tables | 200 |
 
 ### POST /workflows - Request
 
@@ -386,22 +390,63 @@ The action mutation happens **inside the same atomic transaction** as the step r
 }
 ```
 
+### GET /examples - Response
+
+```json
+["diamond-workflow.json", "flaky-order.json", "order-processing.json", "slow-order.json"]
+```
+
+### GET /examples/{filename} - Response
+
+Returns the raw JSON contents of the example file.
+
+### GET /db/snapshot - Response
+
+```json
+{
+  "workflows": {
+    "count": 2,
+    "rows": [{"id": "...", "name": "...", "definition": "...", "created_at": "..."}]
+  },
+  "runs": { "count": 1, "rows": [...] },
+  "steps": { "count": 3, "rows": [...] },
+  "step_results": { "count": 2, "rows": [...] },
+  "orders": { "count": 1, "rows": [...] }
+}
+```
+
+> Returns up to 20 most recent rows per table (ordered by rowid DESC).
+
+### POST /db/reset - Response
+
+```json
+{"status": "ok"}
+```
+
+> Deletes all rows from all 5 tables in FK-safe order. Tables and schema are preserved.
+
 ---
 
 ## Frontend Specification
 
 ### Dashboard (index.html)
 
-- Textarea for pasting workflow JSON (with placeholder example)
-- File upload: "Upload .json" button reads a `.json` file and populates the textarea (user still clicks "Start Workflow" to submit)
-- "Start Workflow" button + validation feedback
-- On submit: POST /workflows -> POST /workflows/{id}/runs -> redirect to run detail
+- Example workflow dropdown: fetches GET /examples, selecting one loads JSON into textarea
+- Textarea for pasting workflow JSON (or loaded from example/upload)
+- File upload: "Upload .json" button reads a `.json` file and populates the textarea
+- Two submit options (visually distinct cards):
+  - **"Start Workflow"** — creates workflow + run, no order involved
+  - **"Start with Order"** — creates a demo order ($49.99), then creates workflow + run with order_id attached. Actions in the workflow will mutate the order status.
+- Format JSON button + JSON auto-fix (single quotes, trailing commas, unquoted keys)
 - Runs list table: workflow name, status (color-coded), started time, duration
 - Click row -> navigate to run detail
+- "Reset DB" button: POST /db/reset, clears all tables with confirmation dialog
+- Link to Live DB Viewer
 
 ### Run Detail (run.html?id=...)
 
 - Header: workflow name, run status (colored), start/end time, duration
+- Order section (shown when run has order_id): polls GET /orders/{order_id}, displays order status badge and amount in real time
 - Steps list (vertical, ordered by step_index):
   - Step name + status indicator (◯ pending, ⟳ running, ✓ completed, ✗ failed)
   - Timing info
@@ -409,14 +454,26 @@ The action mutation happens **inside the same atomic transaction** as the step r
   - Error message if failed
 - Polls GET /runs/{run_id} every 1-2s while status is "running"; stops when done
 
+### Live DB Viewer (db.html)
+
+- Polls GET /db/snapshot every 1.5s
+- Renders all 5 tables (workflows, runs, steps, step_results, orders) with row counts
+- Status values are color-coded (same palette as run/step statuses + order statuses)
+- Change highlighting: yellow flash animation on cells that changed since last poll
+- Long values (definition, result_data) truncated with hover-to-expand
+- Green pulse indicator shows live polling is active
+
 ### Status Colors
 
-| Status | Color |
-|--------|-------|
-| pending | grey (#888) |
-| running | blue (#2196F3) |
-| completed | green (#4CAF50) |
-| failed | red (#f44336) |
+| Status | Color | Used By |
+|--------|-------|---------|
+| pending | grey (#888) | runs, steps, orders |
+| running | blue (#2196F3) | runs, steps |
+| completed | green (#4CAF50) | runs, steps |
+| failed | red (#f44336) | runs, steps |
+| validated | blue (#2196F3) | orders |
+| charged | orange (#FF9800) | orders |
+| shipped | green (#4CAF50) | orders |
 
 ---
 
@@ -548,6 +605,16 @@ The action mutation happens **inside the same atomic transaction** as the step r
 ```
 
 ~7 seconds total if no retries needed. Charge step (30% failure, 2 retries) will usually succeed eventually.
+
+### Example Workflow Files
+
+| File | Purpose | Duration |
+|------|---------|----------|
+| `order-processing.json` | Standard order workflow (validate→charge→ship) | ~7s |
+| `simple-pipeline.json` | ETL pipeline (fetch→transform→load), no order actions | ~6s |
+| `diamond-workflow.json` | Diamond dependency graph, tests topo sort | ~4s |
+| `slow-order.json` | Slow steps (15-20s each) for crash testing | ~60s+ |
+| `flaky-order.json` | 50% failure on charge/ship with 5 retries each, for retry testing | ~35-120s |
 
 ---
 

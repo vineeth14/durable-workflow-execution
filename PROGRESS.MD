@@ -5,8 +5,8 @@
 
 ## Current Status
 
-**Active Phase**: Phase 12 - COMPLETE
-**Last Updated**: 2026-02-12
+**Active Phase**: Phase 14 - Frontend Enhancements - COMPLETE
+**Last Updated**: 2026-02-11
 
 ---
 
@@ -26,6 +26,8 @@
 | 10 | Dependency-Ordered Execution | COMPLETE | topological_sort, relaxed validation, cycle detection, 10 new tests |
 | 11 | File Upload | COMPLETE | Upload .json file to populate textarea on dashboard |
 | 12 | Action Dispatch & Business Logic | COMPLETE | actions.py, order_id on runs, dispatch in execute_step, 21 new tests |
+| 13 | DB Viewer & Order Workflow Button | COMPLETE | db.html, /db/snapshot, "Start with Order" button, change highlights |
+| 14 | Frontend Enhancements | COMPLETE | Example selector, DB reset, order status on run detail, slow/flaky test workflows |
 
 ---
 
@@ -34,14 +36,15 @@
 | File | Purpose | Status |
 |------|---------|--------|
 | pyproject.toml | Project config, dependencies | DONE - FastAPI/uvicorn/pydantic + pytest/httpx (dev) |
-| main.py | FastAPI app + routes | DONE - 8 routes, CORS, startup event, DB dependency, optional order_id on run creation |
+| main.py | FastAPI app + routes | DONE - 12 routes, CORS, startup event, DB dependency, examples API, DB snapshot/reset |
 | database.py | DB connection handling + schema init | DONE - order_id column on runs table |
 | models.py | Pydantic request/response models | DONE - StartRunRequest, order_id on RunSummaryResponse/RunDetailResponse |
 | tasks.py | Simulated task executor | DONE |
 | executor.py | CRUD helpers + execution loop + recovery + topo sort | DONE - create_run accepts order_id, execute_step dispatches actions, get_all_runs/get_run_detail return order_id |
 | actions.py | ACTION_REGISTRY + action functions + dispatch_action | DONE - validate_order, charge_payment, ship_order, send_notification |
-| static/index.html | Dashboard frontend | DONE - workflow submit, auto-refreshing runs table (orders demo commented out) |
-| static/run.html | Run detail frontend | DONE - real-time step visualization with polling |
+| static/index.html | Dashboard frontend | DONE - example selector, "Start Workflow" / "Start with Order" buttons, runs table, DB reset |
+| static/run.html | Run detail frontend | DONE - real-time step visualization with polling, order status display |
+| static/db.html | Live DB viewer | DONE - polls /db/snapshot, shows all 5 tables, change highlights |
 | static/style.css | Frontend styling | DONE - status colors, clean minimal layout |
 | DECISIONS.md | Tech choices and trade-offs | NOT CREATED |
 | test_executor.py | Pytest tests for executor.py + actions.py | DONE - 64 tests (48 existing + 16 Phase 12) |
@@ -50,6 +53,8 @@
 | examples/order-processing.json | Sample order-processing workflow (validate→charge→ship) | DONE |
 | examples/simple-pipeline.json | Sample ETL pipeline (fetch→transform→load) | DONE |
 | examples/diamond-workflow.json | Sample diamond dependency graph | DONE |
+| examples/slow-order.json | Slow order workflow for crash testing (15-20s steps) | DONE |
+| examples/flaky-order.json | Flaky order workflow for retry testing (50% fail, 5 retries) | DONE |
 
 ---
 
@@ -184,6 +189,26 @@
 - [x] Example workflow JSON files in `examples/`
 - **Verify**: create order, run 3-step workflow with order_id, confirm order status is "shipped" at end — YES (manual curl test + 100 automated tests)
 
+### Phase 13: DB Viewer & Order Workflow Button
+- [x] Live DB viewer page (db.html) with /db/snapshot endpoint
+- [x] Polls every 1.5s, renders all 5 tables with row counts
+- [x] Change highlighting (yellow flash on cell updates/new rows)
+- [x] "Start with Order" button on dashboard (creates order + starts run in one click)
+- [x] Order status display on run detail page (polls alongside run)
+- [x] Link to DB viewer from dashboard
+
+### Phase 14: Frontend Enhancements
+- [x] Example workflow dropdown (fetches from GET /examples endpoint)
+- [x] GET /examples — lists .json files in examples/ directory
+- [x] GET /examples/{filename} — serves example file contents
+- [x] Taller textarea (320px) with clean placeholder
+- [x] Removed default JSON placeholder text
+- [x] POST /db/reset — deletes all rows from all tables (FK-safe order)
+- [x] "Reset DB" button on dashboard with confirmation dialog
+- [x] Visual separation of "Start Workflow" vs "Start with Order" buttons
+- [x] New test workflows: slow-order.json (crash testing), flaky-order.json (retry testing)
+- **Verify**: example selector loads JSON, "Start with Order" shows order status on run page, DB viewer updates live — YES
+
 ---
 
 ## Verification Checkpoints
@@ -202,6 +227,8 @@
 | Out-of-order depends_on produces correct step_index; cycles rejected | 10 | YES |
 | Upload .json file populates textarea, workflow submits successfully | 11 | PENDING USER VERIFICATION |
 | Order progresses pending->validated->charged->shipped during run with order_id | 12 | YES |
+| DB viewer shows live table updates with change highlights | 13 | YES |
+| Example selector, DB reset, order status on run detail all work | 14 | YES |
 
 ---
 
@@ -226,3 +253,8 @@ _Track any issues encountered or decisions made during implementation._
 - **No fulfill_order action (Phase 12)**: `ship_order` transitions directly from "charged" to "shipped". 3 steps instead of 4 keeps the sample workflow simpler.
 - **Optional order_id (Phase 12)**: `order_id` on runs is nullable. Runs without an order_id still execute normally — action dispatch is silently skipped.
 - **send_notification behavior (Phase 12)**: Included in ACTION_REGISTRY but performs no status transition. Demonstrates that not all actions need to mutate order state.
+- **DB snapshot endpoint (Phase 13)**: Returns last 20 rows per table ordered by rowid DESC. Simple SELECT * — no joins, no filtering. Keeps the endpoint trivial.
+- **Change highlighting (Phase 13)**: Client-side diff using primary keys (PK_MAP). Compares previous snapshot to current, marks changed cells with CSS animation. No server-side change tracking needed.
+- **"Start with Order" UX (Phase 14)**: Two visually distinct cards — plain blue "Start Workflow" (no order) vs orange-bordered "Start with Order" (creates $49.99 order automatically). Makes the distinction obvious.
+- **Example serving (Phase 14)**: GET /examples lists files from examples/ directory, GET /examples/{filename} serves contents. No database involvement — reads directly from filesystem.
+- **DB reset (Phase 14)**: Deletes in FK-safe order (step_results → steps → runs → workflows → orders). Uses DELETE not DROP — tables and schema are preserved.
