@@ -14,7 +14,7 @@ I went with **SQLite + custom execution loop** because:
 
 1. **It makes durability guarantees explicit and inspectable** - you can literally watch the DB state change via the live viewer
 2. **Zero infrastructure** - just `uv sync && uv run python main.py` and you're running
-3. **The code directly shows ideas I've applied** - idempotency, atomic commits, crash recovery, state machines
+3. **It eliminates accidental complexity while maintaining flexibility** - step-level state machines, write-ahead idempotency keys, atomic commit boundaries for business logic, and a startup recovery routine. All complexity is essential (crash recovery, idempotency, atomicity).
 
 ## What Would I Do Differently With More Time?
 
@@ -28,7 +28,7 @@ I went with **SQLite + custom execution loop** because:
 
 **Configurable retry policies with exponential backoff** - Initial delay, backoff multiplier, max delay, and jitter so we're not hammering struggling external services all at once.
 
-**External idempotency key propagation** - Pass the step's idempotency key to external services (most payment APIs already support this) to prevent duplicate calls on recovery.
+**External idempotency key propagation** - Pass the step's idempotency key to external services () to prevent duplicate calls on recovery.
 
 **Use Temporal** - To allow for sub-step checkpointing, saga-pattern rollbacks, and multi-node workers. At that point it's smarter to just adopt it than to maintain a custom engine with those features.
 
@@ -38,10 +38,10 @@ I went with **SQLite + custom execution loop** because:
 
 **No parallel step execution** - Steps run sequentially in topological order even when they're totally independent. The ecommerce pipeline takes ~25 seconds sequentially but could finish in ~15 with parallelism. This was a deliberate trade-off—sequential execution makes crash recovery dead simple (just iterate steps in order, skip the completed ones) and avoids any concurrent write headaches in SQLite.
 
-**No sub-step durability** - Checkpointing happens at step boundaries. If a step takes 5 minutes and crashes at minute 4, the whole thing re-runs from scratch. For the simulated tasks here (1-5 seconds each), totally fine. For production workloads with long-running steps, this is where Temporal would be useful it checkpoints after every single side effect within a step.
+**No sub-step durability** - Checkpointing happens at step boundaries. If a step takes 5 minutes and crashes at minute 4, the whole thing re-runs from scratch. For the simulated tasks here, it should be fine. For production workloads with long-running steps, this is where Temporal would be useful it checkpoints after every single side effect within a step.
 
 **External side effects might duplicate on recovery** - The atomic transaction model guarantees that internal database writes and step completion commit together. But if a step makes an external API call (HTTP request, email) and crashes after the call succeeds but before the transaction commits, recovery will re-execute the step and repeat that external call. Real payment or notification integrations would need to pass idempotency keys to the external service.
 
 **No authentication or multi-tenancy** - Any client can create workflows, start runs, view all data, and nuke the database. Production obviously needs user authentication, per-user workflow isolation, and role-based access controls.
 
-**Polling-based UI updates** - Each open browser tab hits the API every 1.5 seconds. Works fine for a demo, but doesn't scale—100 users watching runs means 67 requests/second just for status polling. WebSockets or SSE would only push updates when state actually changes.
+**Polling-based UI updates** - Each open browser tab hits the API every 1.5 seconds. Works fine for a demo, but doesn't scale. WebSockets or SSE would only push updates when state actually changes.
