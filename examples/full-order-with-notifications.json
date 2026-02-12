@@ -1,0 +1,71 @@
+{
+  "name": "full-order-with-notifications",
+  "steps": [
+    {
+      "id": "validate",
+      "type": "task",
+      "config": {
+        "action": "validate_order",
+        "duration_seconds": 2,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": []
+    },
+    {
+      "id": "charge",
+      "type": "task",
+      "config": {
+        "action": "charge_payment",
+        "duration_seconds": 3,
+        "fail_probability": 0.3,
+        "max_retries": 2
+      },
+      "depends_on": ["validate"]
+    },
+    {
+      "id": "notify-confirmed",
+      "type": "task",
+      "config": {
+        "action": "send_notification",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["validate"]
+    },
+    {
+      "id": "ship",
+      "type": "task",
+      "config": {
+        "action": "ship_order",
+        "duration_seconds": 2,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["charge"]
+    },
+    {
+      "id": "notify-charged",
+      "type": "task",
+      "config": {
+        "action": "send_notification",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["charge"]
+    },
+    {
+      "id": "notify-shipped",
+      "type": "task",
+      "config": {
+        "action": "send_notification",
+        "duration_seconds": 1,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["ship"]
+    }
+  ]
+}

@@ -211,6 +211,27 @@ def get_order_route(
 
 
 # ---------------------------------------------------------------------------
+# DB Snapshot (live viewer)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/db/snapshot")
+def db_snapshot(conn: sqlite3.Connection = Depends(get_db)):
+    tables = ["workflows", "runs", "steps", "step_results", "orders"]
+    result = {}
+    for table in tables:
+        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
+        rows = conn.execute(
+            f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT 20"  # noqa: S608
+        ).fetchall()
+        result[table] = {
+            "count": count,
+            "rows": [dict(r) for r in rows],
+        }
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Static files (Phase 8 prep)
 # ---------------------------------------------------------------------------
 

@@ -62,8 +62,9 @@
     }
   ]
 }'></textarea>
-      <div style="display:flex; gap:8px; align-items:center;">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button id="submit-btn" onclick="submitWorkflow()">Start Workflow</button>
+        <button onclick="startOrderWorkflow()" style="background:#FF9800;">Start with Order</button>
         <button id="format-btn" onclick="formatJSON()" style="background:#555;">Format JSON</button>
         <label style="cursor:pointer; font-size:0.85rem; color:#2196F3; margin-left:4px;">
           Upload .json <input type="file" id="file-upload" accept=".json" onchange="uploadFile(event)" style="display:none;">
@@ -89,23 +90,10 @@
       <p id="runs-empty" style="color:#888; font-size:0.85rem; display:none;">No runs yet.</p>
     </section>
 
-    <!-- Orders Demo (hidden — API routes still available at /orders) -->
-    <!--
-    <section>
-      <h2>Orders (Demo)</h2>
-      <div class="form-row">
-        <label>Amount $</label>
-        <input type="number" id="order-amount" step="0.01" min="0.01" value="49.99">
-        <button onclick="createOrder()">Create Order</button>
-      </div>
-      <div class="form-row">
-        <label>Order ID</label>
-        <input type="text" id="order-id" placeholder="paste order UUID">
-        <button onclick="lookupOrder()">Lookup</button>
-      </div>
-      <div id="order-result" class="order-result" style="display:none;"></div>
+    <!-- DB Viewer link -->
+    <section style="padding:12px 20px; text-align:center;">
+      <a href="/db.html">Live DB Viewer</a>
     </section>
-    -->
   </div>
 
 <script>
@@ -255,36 +243,38 @@ async function refreshRuns() {
   }
 }
 
-// --- Orders (commented out — API routes still available at /orders) ---
-/*
-async function createOrder() {
-  const resEl = document.getElementById('order-result');
-  const amount = parseFloat(document.getElementById('order-amount').value);
-  if (!amount || amount <= 0) { resEl.textContent = 'Enter a valid amount'; resEl.style.display = 'block'; return; }
-  try {
-    const order = await api('POST', '/orders', { amount });
-    resEl.textContent = JSON.stringify(order, null, 2);
-    resEl.style.display = 'block';
-  } catch (e) {
-    resEl.textContent = 'Error: ' + e.message;
-    resEl.style.display = 'block';
-  }
-}
+// --- Start with Order (convenience) ---
 
-async function lookupOrder() {
-  const resEl = document.getElementById('order-result');
-  const id = document.getElementById('order-id').value.trim();
-  if (!id) { resEl.textContent = 'Enter an order ID'; resEl.style.display = 'block'; return; }
+async function startOrderWorkflow() {
+  const errEl = document.getElementById('submit-error');
+  const btn = document.getElementById('submit-btn');
+  const ta = document.getElementById('workflow-json');
+  errEl.textContent = '';
+
+  let json;
   try {
-    const order = await api('GET', '/orders/' + id);
-    resEl.textContent = JSON.stringify(order, null, 2);
-    resEl.style.display = 'block';
+    json = JSON.parse(ta.value);
+  } catch (_) {
+    try {
+      json = JSON.parse(tryFixJSON(ta.value));
+      ta.value = JSON.stringify(json, null, 2);
+    } catch (e) {
+      errEl.textContent = 'Invalid JSON (auto-fix failed): ' + e.message;
+      return;
+    }
+  }
+
+  btn.disabled = true;
+  try {
+    const order = await api('POST', '/orders', { amount: 49.99 });
+    const wf = await api('POST', '/workflows', json);
+    const run = await api('POST', '/workflows/' + wf.id + '/runs', { order_id: order.id });
+    window.location.href = '/run.html?id=' + run.id;
   } catch (e) {
-    resEl.textContent = 'Error: ' + e.message;
-    resEl.style.display = 'block';
+    errEl.textContent = e.message;
+    btn.disabled = false;
   }
 }
-*/
 
 // --- Helpers ---
 

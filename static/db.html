@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live DB Viewer</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .db-table { margin-bottom: 24px; }
+    .db-table h3 {
+      font-size: 1rem;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .db-table .count {
+      font-size: 0.8rem;
+      color: #888;
+      font-weight: normal;
+    }
+    .db-table table {
+      font-size: 0.8rem;
+      width: 100%;
+    }
+    .db-table td, .db-table th {
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 4px 8px;
+    }
+    .db-table td:hover {
+      white-space: normal;
+      word-break: break-all;
+    }
+    @keyframes highlight {
+      0% { background: #fff3cd; }
+      100% { background: transparent; }
+    }
+    .cell-changed {
+      animation: highlight 1.5s ease-out;
+    }
+    .pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4CAF50;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    #last-updated {
+      font-size: 0.8rem;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <div>
+        <a href="/">&larr; Back to Dashboard</a>
+        <h1 style="margin-top:8px;">Live DB Viewer</h1>
+      </div>
+      <div style="text-align:right;">
+        <span class="pulse"></span> <span id="last-updated">Loading...</span>
+      </div>
+    </div>
+
+    <div id="tables"></div>
+  </div>
+
+<script>
+const TABLE_ORDER = ['workflows', 'runs', 'steps', 'step_results', 'orders'];
+const STATUS_COLORS = {
+  pending: '#888', running: '#2196F3', completed: '#4CAF50', failed: '#f44336',
+  validated: '#2196F3', charged: '#FF9800', shipped: '#4CAF50',
+};
+
+const PK_MAP = {
+  workflows: 'id', runs: 'id', steps: 'id',
+  step_results: 'idempotency_key', orders: 'id',
+};
+
+let prevData = null;
+
+function diffSnapshot(oldData, newData) {
+  const changed = new Set();
+  if (!oldData) return changed;
+  for (const name of TABLE_ORDER) {
+    const oldTable = oldData[name];
+    const newTable = newData[name];
+    if (!oldTable || !newTable) continue;
+    const pk = PK_MAP[name];
+    const oldByPK = {};
+    for (const row of oldTable.rows) oldByPK[row[pk]] = row;
+    for (const row of newTable.rows) {
+      const oldRow = oldByPK[row[pk]];
+      if (!oldRow) {
+        // New row — mark all cells
+        for (const col of Object.keys(row)) changed.add(`${name}:${row[pk]}:${col}`);
+      } else {
+        for (const col of Object.keys(row)) {
+          if (String(row[col]) !== String(oldRow[col])) {
+            changed.add(`${name}:${row[pk]}:${col}`);
+          }
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '<span style="color:#ccc;">null</span>';
+  const el = document.createElement('span');
+  el.textContent = String(s);
+  return el.innerHTML;
+}
+
+function formatCell(key, val) {
+  if (val === null || val === undefined) return '<span style="color:#ccc;">null</span>';
+  if (key === 'status') {
+    const color = STATUS_COLORS[val] || '#333';
+    return `<span style="color:${color}; font-weight:600;">${esc(val)}</span>`;
+  }
+  if (key === 'definition' || key === 'result_data') {
+    const s = String(val);
+    return s.length > 40 ? esc(s.substring(0, 40) + '...') : esc(s);
+  }
+  return esc(val);
+}
+
+function renderSnapshot(data, changed) {
+  const container = document.getElementById('tables');
+  let html = '';
+
+  for (const name of TABLE_ORDER) {
+    const table = data[name];
+    if (!table) continue;
+    const pk = PK_MAP[name];
+
+    html += `<section class="db-table">`;
+    html += `<h3>${name} <span class="count">(${table.count} row${table.count !== 1 ? 's' : ''})</span></h3>`;
+
+    if (table.rows.length === 0) {
+      html += `<p style="color:#888; font-size:0.8rem;">Empty</p>`;
+    } else {
+      const cols = Object.keys(table.rows[0]);
+      html += `<div style="overflow-x:auto;"><table>`;
+      html += `<thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
+      html += `<tbody>`;
+      for (const row of table.rows) {
+        html += `<tr>${cols.map(c => {
+          const cls = changed.has(`${name}:${row[pk]}:${c}`) ? ' class="cell-changed"' : '';
+          return `<td${cls}>${formatCell(c, row[c])}</td>`;
+        }).join('')}</tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    html += `</section>`;
+  }
+
+  container.innerHTML = html;
+  document.getElementById('last-updated').textContent =
+    'Updated ' + new Date().toLocaleTimeString();
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/db/snapshot');
+    const data = await res.json();
+    const changed = diffSnapshot(prevData, data);
+    renderSnapshot(data, changed);
+    prevData = data;
+  } catch (e) {
+    console.error('Failed to fetch snapshot:', e);
+  }
+}
+
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>

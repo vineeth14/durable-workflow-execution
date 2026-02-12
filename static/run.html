@@ -14,6 +14,11 @@
       <p style="color:#888;">Loading...</p>
     </section>
 
+    <section id="order-section" style="display:none;">
+      <h2>Order</h2>
+      <div id="order-info"></div>
+    </section>
+
     <section>
       <h2>Steps</h2>
       <ul id="step-list" class="step-list"></ul>
@@ -24,6 +29,7 @@
 const API = '';
 const runId = new URLSearchParams(window.location.search).get('id');
 let pollTimer = null;
+let currentOrderId = null;
 
 async function api(method, path) {
   const res = await fetch(API + path, { method });
@@ -59,8 +65,31 @@ const ICONS = {
   failed: '\u2717',
 };
 
+function renderOrder(order) {
+  const section = document.getElementById('order-section');
+  section.style.display = 'block';
+  document.getElementById('order-info').innerHTML = `
+    <div style="display:flex; gap:16px; align-items:center;">
+      <span>Status: <span class="status status-${orderStatusClass(order.status)}">${order.status}</span></span>
+      <span>Amount: $${order.amount.toFixed(2)}</span>
+      <span style="font-size:0.8rem; color:#888;">Updated: ${formatTime(order.updated_at)}</span>
+    </div>
+  `;
+}
+
+function orderStatusClass(status) {
+  switch (status) {
+    case 'pending': return 'pending';
+    case 'validated': return 'running';
+    case 'charged': return 'running';
+    case 'shipped': return 'completed';
+    default: return 'pending';
+  }
+}
+
 function renderRun(run) {
   document.title = run.workflow_name + ' - Run';
+  currentOrderId = run.order_id || null;
 
   document.getElementById('run-header').innerHTML = `
     <h1>${esc(run.workflow_name)}</h1>
@@ -109,6 +138,12 @@ async function loadRun() {
   try {
     const run = await api('GET', '/runs/' + runId);
     renderRun(run);
+    if (currentOrderId) {
+      try {
+        const order = await api('GET', '/orders/' + currentOrderId);
+        renderOrder(order);
+      } catch (_) {}
+    }
     if (run.status !== 'running' && run.status !== 'pending') {
       clearInterval(pollTimer);
     }
