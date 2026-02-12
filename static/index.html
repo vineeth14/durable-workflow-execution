@@ -13,62 +13,27 @@
     <!-- Submit Workflow -->
     <section>
       <h2>Submit Workflow</h2>
-      <textarea id="workflow-json" placeholder='{
-  "name": "order-processing",
-  "steps": [
-    {
-      "id": "validate",
-      "type": "task",
-      "config": {
-        "action": "validate_order",
-        "duration_seconds": 2,
-        "fail_probability": 0.0,
-        "max_retries": 0
-      },
-      "depends_on": []
-    },
-    {
-      "id": "charge",
-      "type": "task",
-      "config": {
-        "action": "charge_payment",
-        "duration_seconds": 3,
-        "fail_probability": 0.3,
-        "max_retries": 2
-      },
-      "depends_on": ["validate"]
-    },
-    {
-      "id": "fulfill",
-      "type": "task",
-      "config": {
-        "action": "fulfill_order",
-        "duration_seconds": 2,
-        "fail_probability": 0.0,
-        "max_retries": 0
-      },
-      "depends_on": ["charge"]
-    },
-    {
-      "id": "notify",
-      "type": "task",
-      "config": {
-        "action": "send_notification",
-        "duration_seconds": 1,
-        "fail_probability": 0.0,
-        "max_retries": 0
-      },
-      "depends_on": ["fulfill"]
-    }
-  ]
-}'></textarea>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <button id="submit-btn" onclick="submitWorkflow()">Start Workflow</button>
-        <button onclick="startOrderWorkflow()" style="background:#FF9800;">Start with Order</button>
+      <div style="margin-bottom:8px;">
+        <select id="example-select" onchange="loadExample(this.value)" style="padding:6px 10px; border:1px solid #ccc; border-radius:4px; font-size:0.85rem;">
+          <option value="">Load an example...</option>
+        </select>
+      </div>
+      <textarea id="workflow-json" style="min-height:320px;" placeholder="Select an example or paste workflow JSON here..."></textarea>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
         <button id="format-btn" onclick="formatJSON()" style="background:#555;">Format JSON</button>
         <label style="cursor:pointer; font-size:0.85rem; color:#2196F3; margin-left:4px;">
           Upload .json <input type="file" id="file-upload" accept=".json" onchange="uploadFile(event)" style="display:none;">
         </label>
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px; padding:12px; border:1px solid #ddd; border-radius:6px;">
+          <button id="submit-btn" onclick="submitWorkflow()" style="width:100%; margin-bottom:6px;">Start Workflow</button>
+          <p style="font-size:0.75rem; color:#888; margin:0;">Run steps only. No order created.</p>
+        </div>
+        <div style="flex:1; min-width:200px; padding:12px; border:1px solid #FF9800; border-radius:6px; background:#fff8f0;">
+          <button onclick="startOrderWorkflow()" style="background:#FF9800; width:100%; margin-bottom:6px;">Start with Order</button>
+          <p style="font-size:0.75rem; color:#888; margin:0;">Creates an order, then runs the workflow with it attached. Actions like <code>validate_order</code> will update the order status.</p>
+        </div>
       </div>
       <div id="submit-error" class="error"></div>
     </section>
@@ -90,9 +55,10 @@
       <p id="runs-empty" style="color:#888; font-size:0.85rem; display:none;">No runs yet.</p>
     </section>
 
-    <!-- DB Viewer link -->
-    <section style="padding:12px 20px; text-align:center;">
+    <!-- DB Viewer link + Reset -->
+    <section style="padding:12px 20px; display:flex; justify-content:center; gap:16px; align-items:center;">
       <a href="/db.html">Live DB Viewer</a>
+      <button onclick="resetDB()" style="background:#f44336; font-size:0.8rem; padding:4px 12px;">Reset DB</button>
     </section>
   </div>
 
@@ -284,7 +250,47 @@ function esc(s) {
   return el.innerHTML;
 }
 
+// --- Examples dropdown ---
+
+async function loadExamples() {
+  try {
+    const names = await api('GET', '/examples');
+    const sel = document.getElementById('example-select');
+    for (const name of names) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name.replace('.json', '');
+      sel.appendChild(opt);
+    }
+  } catch (_) {}
+}
+
+async function loadExample(filename) {
+  if (!filename) return;
+  try {
+    const data = await api('GET', '/examples/' + filename);
+    document.getElementById('workflow-json').value = JSON.stringify(data, null, 2);
+    document.getElementById('submit-error').textContent = '';
+  } catch (e) {
+    document.getElementById('submit-error').textContent = 'Failed to load example: ' + e.message;
+  }
+  document.getElementById('example-select').value = '';
+}
+
+// --- DB Reset ---
+
+async function resetDB() {
+  if (!confirm('Delete all workflows, runs, orders, and results?')) return;
+  try {
+    await api('POST', '/db/reset');
+    refreshRuns();
+  } catch (e) {
+    alert('Reset failed: ' + e.message);
+  }
+}
+
 // --- Init ---
+loadExamples();
 refreshRuns();
 setInterval(refreshRuns, 2000);
 </script>

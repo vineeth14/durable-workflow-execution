@@ -211,6 +211,28 @@ def get_order_route(
 
 
 # ---------------------------------------------------------------------------
+# Example workflows
+# ---------------------------------------------------------------------------
+
+examples_dir = Path(__file__).parent / "examples"
+
+
+@app.get("/examples")
+def list_examples():
+    if not examples_dir.exists():
+        return []
+    return sorted(f.name for f in examples_dir.glob("*.json"))
+
+
+@app.get("/examples/{filename}")
+def get_example(filename: str):
+    path = examples_dir / filename
+    if not path.exists() or not path.suffix == ".json":
+        raise HTTPException(status_code=404, detail="Example not found")
+    return json.loads(path.read_text())
+
+
+# ---------------------------------------------------------------------------
 # DB Snapshot (live viewer)
 # ---------------------------------------------------------------------------
 
@@ -229,6 +251,19 @@ def db_snapshot(conn: sqlite3.Connection = Depends(get_db)):
             "rows": [dict(r) for r in rows],
         }
     return result
+
+
+# ---------------------------------------------------------------------------
+# DB Reset
+# ---------------------------------------------------------------------------
+
+
+@app.post("/db/reset")
+def db_reset(conn: sqlite3.Connection = Depends(get_db)):
+    for table in ["step_results", "steps", "runs", "workflows", "orders"]:
+        conn.execute(f"DELETE FROM {table}")  # noqa: S608
+    conn.commit()
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

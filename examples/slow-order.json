@@ -1,0 +1,49 @@
+{
+  "name": "slow-order-processing",
+  "steps": [
+    {
+      "id": "validate",
+      "type": "task",
+      "config": {
+        "action": "validate_order",
+        "duration_seconds": 15,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": []
+    },
+    {
+      "id": "charge",
+      "type": "task",
+      "config": {
+        "action": "charge_payment",
+        "duration_seconds": 20,
+        "fail_probability": 0.3,
+        "max_retries": 3
+      },
+      "depends_on": ["validate"]
+    },
+    {
+      "id": "ship",
+      "type": "task",
+      "config": {
+        "action": "ship_order",
+        "duration_seconds": 15,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["charge"]
+    },
+    {
+      "id": "notify",
+      "type": "task",
+      "config": {
+        "action": "send_notification",
+        "duration_seconds": 10,
+        "fail_probability": 0.0,
+        "max_retries": 0
+      },
+      "depends_on": ["ship"]
+    }
+  ]
+}
